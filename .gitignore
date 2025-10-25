@@ -9,6 +9,7 @@ yarn-error.log*
 .vscode/
 .idea/
 keys/
+certs/
 coverage/
 # Snyk Security Extension - AI Rules (auto-generated)
 .github/instructions/snyk_rules.instructions.md
