@@ -1,3 +1,11 @@
+# Local HTTPS dev certificates (do not commit)
+certs/*.pem
+certs/*.key
+certs/*.crt
+
+# Env files (if any)
+.env
+
 node_modules/
 dist/
 .env
