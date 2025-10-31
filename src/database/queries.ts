@@ -2,14 +2,9 @@ import { pool } from './connection';
 import type {
   User,
   Post,
-  Reaction,
-  Comment,
-  Follow,
   MusicIntegration,
   CreateUserData,
   CreatePostData,
-  CreateReactionData,
-  CreateCommentData,
   CreateMusicIntegrationData,
 } from './types';
 
