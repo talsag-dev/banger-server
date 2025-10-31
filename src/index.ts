@@ -16,20 +16,29 @@ import rateLimit from 'express-rate-limit';
 import cookieParser from 'cookie-parser';
 import { authRouter } from './routes/auth';
 import { spotifyRouter } from './routes/spotify';
+import { postsRouter } from './routes/posts';
 import { errorHandler } from './middleware/errorHandler';
+import { initializeDatabase } from './database/init';
+import { config, allowedOrigins } from './config';
 
 console.log('🔍 Environment variables check:');
-console.log(`   NODE_ENV: ${process.env.NODE_ENV}`);
-console.log(`   PORT: ${process.env.PORT}`);
-console.log(`   SPOTIFY_CLIENT_ID length: ${(process.env.SPOTIFY_CLIENT_ID || '').length}`);
-console.log(`   SPOTIFY_CLIENT_SECRET length: ${(process.env.SPOTIFY_CLIENT_SECRET || '').length}`);
-console.log(`   SPOTIFY_REDIRECT_URI: ${process.env.SPOTIFY_REDIRECT_URI}`);
+console.log(`   NODE_ENV: ${config.nodeEnv}`);
+console.log(`   PORT: ${config.port}`);
+console.log(`   SPOTIFY_CLIENT_ID length: ${config.spotify.clientId.length}`);
+console.log(`   SPOTIFY_CLIENT_SECRET length: ${config.spotify.clientSecret.length}`);
+console.log(`   SPOTIFY_REDIRECT_URI: ${config.spotify.redirectUri}`);
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = config.port || 3001;
 
-// Trust proxy for ngrok and load balancers
-app.set('trust proxy', true);
+// Configure trust proxy more securely
+if (config.nodeEnv === 'production') {
+  // In production, trust specific proxy (adjust as needed for your deployment)
+  app.set('trust proxy', 1);
+} else {
+  // In development, trust ngrok and localhost
+  app.set('trust proxy', ['loopback', 'linklocal', 'uniquelocal']);
+}
 
 // Security middleware
 app.use(
@@ -48,7 +57,7 @@ app.use(
 
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+    origin: allowedOrigins,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Cookie'],
@@ -56,14 +65,24 @@ app.use(
 );
 
 // Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs
-  message: { error: 'Too many requests from this IP, please try again later.' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-app.use(limiter);
+// const limiter = rateLimit({
+//   windowMs: 15 * 60 * 1000, // 15 minutes
+//   max: 100, // Limit each IP to 100 requests per windowMs
+//   message: { error: 'Too many requests from this IP, please try again later.' },
+//   standardHeaders: true,
+//   legacyHeaders: false,
+//   // Explicitly configure how to get the client IP
+//   keyGenerator: (req) => {
+//     // In development with ngrok, use x-forwarded-for header
+//     if (process.env.NODE_ENV !== 'production' && req.headers['x-forwarded-for']) {
+//       const forwardedIps = req.headers['x-forwarded-for'] as string;
+//       return forwardedIps.split(',')[0].trim();
+//     }
+//     // Otherwise use the connection IP
+//     return req.ip || 'unknown';
+//   },
+// });
+// app.use(limiter);
 
 // Body parsing middleware
 app.use(express.json({ limit: '10mb' }));
@@ -73,6 +92,7 @@ app.use(cookieParser());
 // Routes
 app.use('/api/auth', authRouter);
 app.use('/api/spotify', spotifyRouter);
+app.use('/api/posts', postsRouter);
 
 // Health check
 app.get('/health', (req, res) => {
@@ -81,6 +101,8 @@ app.get('/health', (req, res) => {
     timestamp: new Date().toISOString(),
     service: 'banger-server',
     version: '1.0.0',
+    ssl: req.secure || req.headers['x-forwarded-proto'] === 'https',
+    protocol: req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http',
   });
 });
 
@@ -93,45 +115,35 @@ app.use('*', (req, res) => {
 app.use(errorHandler);
 
 // Create HTTPS server for development
-const startServer = () => {
-  const isProduction = process.env.NODE_ENV === 'production';
+const startServer = async () => {
+  try {
+    // Initialize database first
+    await initializeDatabase();
 
-  if (!isProduction) {
-    // Development: Use HTTPS with self-signed certificates
-    const keyPath = path.join(__dirname, '../certs/localhost-key.pem');
-    const certPath = path.join(__dirname, '../certs/localhost-cert.pem');
-
-    if (fs.existsSync(keyPath) && fs.existsSync(certPath)) {
+    // Always use HTTPS for all environments
+    try {
+      const certPath = path.join(__dirname, '../certs/localhost-cert.pem');
+      const keyPath = path.join(__dirname, '../certs/localhost-key.pem');
       const httpsOptions = {
         key: fs.readFileSync(keyPath),
         cert: fs.readFileSync(certPath),
       };
-
       https.createServer(httpsOptions, app).listen(PORT, () => {
         console.log(`🚀 Banger Server running on HTTPS port ${PORT}`);
-        console.log(`� HTTPS URL: https://localhost:${PORT}`);
-        console.log(`�📱 Frontend URL: ${process.env.FRONTEND_URL}`);
-        console.log(`🎵 Spotify OAuth: ${process.env.SPOTIFY_REDIRECT_URI}`);
-        console.log(`⚠️  Using self-signed certificate for development`);
+        console.log(`🔒 HTTPS URL: https://localhost:${PORT}`);
+        console.log(`📱 Frontend URL: ${config.frontendUrl}`);
+        console.log(`🎵 Spotify OAuth: ${config.spotify.redirectUri}`);
+        console.log(`✅ HTTPS enabled for all environments`);
       });
-    } else {
-      console.error('❌ SSL certificates not found. Please generate them first:');
-      console.error('mkdir -p certs');
-      console.error(
-        'openssl req -x509 -newkey rsa:4096 -keyout certs/localhost-key.pem -out certs/localhost-cert.pem -days 365 -nodes -subj "/CN=localhost"'
-      );
+    } catch (certError) {
+      console.error('❌ SSL certificates not found. HTTPS required.');
       process.exit(1);
     }
-  } else {
-    // Production: Use HTTP (assuming SSL termination at load balancer)
-    app.listen(PORT, () => {
-      console.log(`🚀 Banger Server running on port ${PORT}`);
-      console.log(`📱 Frontend URL: ${process.env.FRONTEND_URL}`);
-      console.log(`🎵 Spotify OAuth: ${process.env.SPOTIFY_REDIRECT_URI}`);
-    });
+  } catch (error) {
+    console.error('❌ Failed to start server:', error);
+    process.exit(1);
   }
 };
-
 startServer();
 
 export default app;
