@@ -172,6 +172,48 @@ export const getUserMusicIntegrations = async (userId: number): Promise<MusicInt
   return rows;
 };
 
+export const getAllUsersWithSpotifyIntegrations = async (): Promise<number[]> => {
+  const { rows } = await pool.query(
+    'SELECT DISTINCT user_id FROM music_integrations WHERE provider = $1 AND refresh_token IS NOT NULL AND is_connected = TRUE',
+    ['spotify']
+  );
+  return rows.map((row) => row.user_id);
+};
+
+export const updateMusicIntegrationTokens = async (
+  userId: number,
+  provider: string,
+  tokens: {
+    access_token?: string;
+    refresh_token?: string;
+    token_expires_at?: Date;
+    has_valid_token?: boolean;
+    last_sync_at?: Date;
+  }
+): Promise<MusicIntegration | null> => {
+  const { rows } = await pool.query(
+    `UPDATE music_integrations 
+     SET access_token = COALESCE($3, access_token),
+         refresh_token = COALESCE($4, refresh_token),
+         token_expires_at = COALESCE($5, token_expires_at),
+         has_valid_token = COALESCE($6, has_valid_token),
+         last_sync_at = COALESCE($7, last_sync_at),
+         updated_at = CURRENT_TIMESTAMP
+     WHERE user_id = $1 AND provider = $2
+     RETURNING *`,
+    [
+      userId,
+      provider,
+      tokens.access_token ?? null,
+      tokens.refresh_token ?? null,
+      tokens.token_expires_at ?? null,
+      tokens.has_valid_token ?? null,
+      tokens.last_sync_at ?? null,
+    ]
+  );
+  return rows[0] || null;
+};
+
 export const updateMusicIntegration = async (
   userId: number,
   provider: string,
@@ -200,13 +242,13 @@ export const updateMusicIntegration = async (
     [
       userId,
       provider,
-      updates.display_name,
-      updates.avatar_url,
-      updates.access_token,
-      updates.refresh_token,
-      updates.token_expires_at,
-      updates.has_valid_token,
-      updates.last_sync_at,
+      updates.display_name ?? null,
+      updates.avatar_url ?? null,
+      updates.access_token ?? null,
+      updates.refresh_token ?? null,
+      updates.token_expires_at ?? null,
+      updates.has_valid_token ?? null,
+      updates.last_sync_at ?? null,
     ]
   );
   return rows[0] || null;

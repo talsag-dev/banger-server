@@ -134,6 +134,10 @@ const startServer = async () => {
         console.log(`📱 Frontend URL: ${config.frontendUrl}`);
         console.log(`🎵 Spotify OAuth: ${config.spotify.redirectUri}`);
         console.log(`✅ HTTPS enabled for all environments`);
+
+        // Start token refresh service
+        const { tokenRefreshService } = require('./services/TokenRefreshService');
+        tokenRefreshService.start();
       });
     } catch (certError) {
       console.error('❌ SSL certificates not found. HTTPS required.');

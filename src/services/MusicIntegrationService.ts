@@ -5,6 +5,7 @@ import {
   findMusicIntegration,
   getUserMusicIntegrations,
   updateMusicIntegration,
+  updateMusicIntegrationTokens,
   disconnectMusicIntegration,
   deleteMusicIntegration,
 } from '../database/queries';
@@ -101,7 +102,7 @@ export class MusicIntegrationService {
       const tokenData: SpotifyTokenResponse = response.data;
       const tokenExpiresAt = new Date(Date.now() + tokenData.expires_in * 1000);
 
-      return await updateMusicIntegration(userId, 'spotify', {
+      return await updateMusicIntegrationTokens(userId, 'spotify', {
         access_token: tokenData.access_token,
         refresh_token: tokenData.refresh_token || integration.refresh_token,
         token_expires_at: tokenExpiresAt,
@@ -112,7 +113,7 @@ export class MusicIntegrationService {
       console.error('Error refreshing Spotify token:', error);
 
       // Mark token as invalid
-      await updateMusicIntegration(userId, 'spotify', {
+      await updateMusicIntegrationTokens(userId, 'spotify', {
         has_valid_token: false,
       });
 
@@ -151,24 +152,30 @@ export class MusicIntegrationService {
     return response.data;
   }
 
-  // Apple Music Integration (placeholder - requires Apple Music API setup)
   async connectAppleMusic(userId: number, authData: any): Promise<MusicIntegration> {
     throw new Error('Apple Music integration not yet implemented');
   }
 
-  // YouTube Music Integration (placeholder - requires YouTube Music API setup)
   async connectYouTubeMusic(userId: number, authData: any): Promise<MusicIntegration> {
     throw new Error('YouTube Music integration not yet implemented');
   }
 
-  // SoundCloud Integration (placeholder - requires SoundCloud API setup)
   async connectSoundCloud(userId: number, authData: any): Promise<MusicIntegration> {
     throw new Error('SoundCloud integration not yet implemented');
   }
 
-  // Generic Integration Management
   async getUserIntegrations(userId: number): Promise<MusicIntegration[]> {
-    return await getUserMusicIntegrations(userId);
+    const integrations = await getUserMusicIntegrations(userId);
+
+    return integrations.map((integration) => {
+      if (integration.token_expires_at) {
+        const isExpired = new Date(integration.token_expires_at) < new Date();
+        if (isExpired) {
+          return { ...integration, has_valid_token: false };
+        }
+      }
+      return integration;
+    });
   }
 
   async getIntegration(userId: number, provider: MusicProvider): Promise<MusicIntegration | null> {
