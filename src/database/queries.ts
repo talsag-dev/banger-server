@@ -439,6 +439,42 @@ export const getUserPostCount = async (userId: number): Promise<number> => {
   return parseInt(rows[0].count, 10) || 0;
 };
 
+export const getPostById = async (postId: number): Promise<Post | null> => {
+  const { rows } = await pool.query('SELECT * FROM posts WHERE id = $1', [postId]);
+  return rows[0] || null;
+};
+
+export const updatePost = async (
+  postId: number,
+  userId: number,
+  updates: { feeling?: string; caption?: string }
+): Promise<Post> => {
+  const { feeling, caption } = updates;
+  const { rows } = await pool.query(
+    `UPDATE posts 
+     SET feeling = COALESCE($1, feeling), 
+         caption = COALESCE($2, caption),
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = $3 AND user_id = $4
+     RETURNING *`,
+    [feeling || null, caption || null, postId, userId]
+  );
+  if (rows.length === 0) {
+    throw new Error('Post not found or unauthorized');
+  }
+  return rows[0];
+};
+
+export const deletePost = async (postId: number, userId: number): Promise<void> => {
+  const { rows } = await pool.query(
+    'DELETE FROM posts WHERE id = $1 AND user_id = $2 RETURNING id',
+    [postId, userId]
+  );
+  if (rows.length === 0) {
+    throw new Error('Post not found or unauthorized');
+  }
+};
+
 // Reaction queries
 export const toggleLike = async (userId: number, postId: number) => {
   const { rows: existingLike } = await pool.query(

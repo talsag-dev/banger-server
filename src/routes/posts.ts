@@ -19,4 +19,10 @@ router.post('/', auth, postsController.create as any);
 // Toggle like on a post
 router.post('/:postId/like', auth, postsController.toggleLike as any);
 
+// Update a post
+router.put('/:postId', auth, postsController.update as any);
+
+// Delete a post
+router.delete('/:postId', auth, postsController.delete as any);
+
 export { router as postsRouter };

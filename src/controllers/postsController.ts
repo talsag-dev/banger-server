@@ -6,14 +6,57 @@ import {
   getUserPosts,
   getUserLikedPosts,
   toggleLike,
+  updatePost,
+  deletePost,
+  getPostById,
 } from '../database/queries';
+
+// Helper to detect platform from URL
+const detectPlatform = (
+  url?: string
+): 'spotify' | 'apple-music' | 'youtube-music' | 'soundcloud' => {
+  if (!url) return 'spotify';
+  const lower = url.toLowerCase();
+  if (lower.includes('spotify')) return 'spotify';
+  if (lower.includes('apple') || lower.includes('music.apple')) return 'apple-music';
+  if (lower.includes('youtube')) return 'youtube-music';
+  if (lower.includes('soundcloud')) return 'soundcloud';
+  return 'spotify';
+};
+
+// Helper to transform DB post to frontend format
+const transformPost = (dbPost: any) => ({
+  id: dbPost.id.toString(),
+  userId: dbPost.user_id.toString(),
+  track: {
+    id: dbPost.track_id,
+    title: dbPost.track_name,
+    artist: dbPost.artist_name,
+    album: dbPost.album_name || 'Unknown Album',
+    albumCover: dbPost.track_image || 'https://via.placeholder.com/300?text=No+Image',
+    duration: 0,
+    platform: detectPlatform(dbPost.track_external_url),
+    externalUrl: dbPost.track_external_url || '',
+    previewUrl: dbPost.track_preview_url || undefined,
+  },
+  feeling: dbPost.feeling || undefined,
+  caption: dbPost.caption || undefined,
+  isCurrentlyListening: dbPost.is_currently_listening,
+  timestamp:
+    dbPost.created_at instanceof Date
+      ? dbPost.created_at.toISOString()
+      : new Date(dbPost.created_at).toISOString(),
+  reactions: [],
+  comments: [],
+});
 
 export const postsController = {
   feed: async (req: Request, res: Response) => {
     try {
       const limit = parseInt(req.query.limit as string) || 20;
       const offset = parseInt(req.query.offset as string) || 0;
-      const posts = await getPosts(limit, offset);
+      const dbPosts = await getPosts(limit, offset);
+      const posts = dbPosts.map(transformPost);
       return res.status(200).json({ success: true, data: { posts } });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: 'Failed to fetch posts' });
@@ -29,7 +72,8 @@ export const postsController = {
 
       const limit = parseInt(req.query.limit as string) || 20;
       const offset = parseInt(req.query.offset as string) || 0;
-      const posts = await getUserPosts(userId, limit, offset);
+      const dbPosts = await getUserPosts(userId, limit, offset);
+      const posts = dbPosts.map(transformPost);
       return res.status(200).json({ success: true, data: { posts } });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: 'Failed to fetch user posts' });
@@ -45,7 +89,8 @@ export const postsController = {
 
       const limit = parseInt(req.query.limit as string) || 20;
       const offset = parseInt(req.query.offset as string) || 0;
-      const posts = await getUserLikedPosts(userId, limit, offset);
+      const dbPosts = await getUserLikedPosts(userId, limit, offset);
+      const posts = dbPosts.map(transformPost);
       return res.status(200).json({ success: true, data: { posts } });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: 'Failed to fetch liked posts' });
@@ -90,7 +135,8 @@ export const postsController = {
         is_currently_listening: is_currently_listening || false,
       };
 
-      const post = await createPost(postData);
+      const dbPost = await createPost(postData);
+      const post = transformPost(dbPost);
       return res.status(200).json({ success: true, data: { post } });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: 'Failed to create post' });
@@ -108,6 +154,75 @@ export const postsController = {
       return res.status(200).json({ success: true, data: result });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: 'Failed to toggle like' });
+    }
+  },
+
+  update: async (req: any, res: Response) => {
+    try {
+      const postId = parseInt(req.params.postId);
+      const userId = req.user?.dbUser?.id;
+
+      if (!userId) {
+        return res.status(401).json({ success: false, error: 'User not authenticated' });
+      }
+
+      if (Number.isNaN(postId)) {
+        return res.status(400).json({ success: false, error: 'Invalid post ID' });
+      }
+
+      const { feeling, caption } = req.body;
+
+      // Verify post exists and belongs to user
+      const existingPost = await getPostById(postId);
+      if (!existingPost) {
+        return res.status(404).json({ success: false, error: 'Post not found' });
+      }
+
+      if (existingPost.user_id !== userId) {
+        return res.status(403).json({ success: false, error: 'Unauthorized' });
+      }
+
+      const updatedPost = await updatePost(postId, userId, { feeling, caption });
+      const post = transformPost(updatedPost);
+      return res.status(200).json({ success: true, data: { post } });
+    } catch (error: any) {
+      if (error.message === 'Post not found or unauthorized') {
+        return res.status(404).json({ success: false, error: error.message });
+      }
+      return res.status(500).json({ success: false, error: 'Failed to update post' });
+    }
+  },
+
+  delete: async (req: any, res: Response) => {
+    try {
+      const postId = parseInt(req.params.postId);
+      const userId = req.user?.dbUser?.id;
+
+      if (!userId) {
+        return res.status(401).json({ success: false, error: 'User not authenticated' });
+      }
+
+      if (Number.isNaN(postId)) {
+        return res.status(400).json({ success: false, error: 'Invalid post ID' });
+      }
+
+      // Verify post exists and belongs to user
+      const existingPost = await getPostById(postId);
+      if (!existingPost) {
+        return res.status(404).json({ success: false, error: 'Post not found' });
+      }
+
+      if (existingPost.user_id !== userId) {
+        return res.status(403).json({ success: false, error: 'Unauthorized' });
+      }
+
+      await deletePost(postId, userId);
+      return res.status(200).json({ success: true, data: { message: 'Post deleted' } });
+    } catch (error: any) {
+      if (error.message === 'Post not found or unauthorized') {
+        return res.status(404).json({ success: false, error: error.message });
+      }
+      return res.status(500).json({ success: false, error: 'Failed to delete post' });
     }
   },
 };
