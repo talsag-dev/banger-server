@@ -6,13 +6,14 @@ import type {
   CreateUserData,
   CreatePostData,
   CreateMusicIntegrationData,
+  Follow,
 } from './types';
 
 // User queries
 export const createUser = async (userData: CreateUserData): Promise<User> => {
   const { rows } = await pool.query(
-    `INSERT INTO users (auth_provider, google_id, apple_id, spotify_id, email, password_hash, display_name, avatar_url, bio, email_verified) 
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) 
+    `INSERT INTO users (auth_provider, google_id, apple_id, spotify_id, email, password_hash, username, display_name, avatar_url, bio, email_verified) 
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) 
      RETURNING *`,
     [
       userData.auth_provider,
@@ -21,6 +22,7 @@ export const createUser = async (userData: CreateUserData): Promise<User> => {
       userData.spotify_id,
       userData.email,
       userData.password_hash,
+      userData.username,
       userData.display_name,
       userData.avatar_url,
       userData.bio,
@@ -50,15 +52,16 @@ export const findUserBySpotifyId = async (spotifyId: string): Promise<User | nul
   return rows[0] || null;
 };
 
-export const findUserById = async (id: number): Promise<User | null> => {
+export const findUserById = async (id: string): Promise<User | null> => {
   const { rows } = await pool.query('SELECT * FROM users WHERE id = $1', [id]);
   return rows[0] || null;
 };
 
 export const updateUser = async (
-  userId: number,
+  userId: string,
   userData: {
     email?: string;
+    username?: string;
     display_name?: string;
     avatar_url?: string;
     bio?: string;
@@ -68,16 +71,18 @@ export const updateUser = async (
   const { rows } = await pool.query(
     `UPDATE users 
      SET email = COALESCE($2, email), 
-         display_name = COALESCE($3, display_name), 
-         avatar_url = COALESCE($4, avatar_url),
-         bio = COALESCE($5, bio),
-         email_verified = COALESCE($6, email_verified),
+         username = COALESCE($3, username),
+         display_name = COALESCE($4, display_name), 
+         avatar_url = COALESCE($5, avatar_url),
+         bio = COALESCE($6, bio),
+         email_verified = COALESCE($7, email_verified),
          updated_at = CURRENT_TIMESTAMP
      WHERE id = $1 
      RETURNING *`,
     [
       userId,
       userData.email,
+      userData.username,
       userData.display_name,
       userData.avatar_url,
       userData.bio,
@@ -88,7 +93,7 @@ export const updateUser = async (
 };
 
 export const updateUserPassword = async (
-  userId: number,
+  userId: string,
   passwordHash: string
 ): Promise<User | null> => {
   const { rows } = await pool.query(
@@ -102,7 +107,7 @@ export const updateUserPassword = async (
 };
 
 export const setResetToken = async (
-  userId: number,
+  userId: string,
   resetToken: string,
   expiresAt: Date
 ): Promise<void> => {
@@ -122,7 +127,7 @@ export const findUserByResetToken = async (resetToken: string): Promise<User | n
   return rows[0] || null;
 };
 
-export const clearResetToken = async (userId: number): Promise<void> => {
+export const clearResetToken = async (userId: string): Promise<void> => {
   await pool.query(
     `UPDATE users 
      SET reset_token = NULL, reset_token_expires = NULL, updated_at = CURRENT_TIMESTAMP
@@ -154,7 +159,7 @@ export const createMusicIntegration = async (
 };
 
 export const findMusicIntegration = async (
-  userId: number,
+  userId: string,
   provider: string
 ): Promise<MusicIntegration | null> => {
   const { rows } = await pool.query(
@@ -164,7 +169,7 @@ export const findMusicIntegration = async (
   return rows[0] || null;
 };
 
-export const getUserMusicIntegrations = async (userId: number): Promise<MusicIntegration[]> => {
+export const getUserMusicIntegrations = async (userId: string): Promise<MusicIntegration[]> => {
   const { rows } = await pool.query(
     'SELECT * FROM music_integrations WHERE user_id = $1 ORDER BY connected_at DESC',
     [userId]
@@ -172,7 +177,7 @@ export const getUserMusicIntegrations = async (userId: number): Promise<MusicInt
   return rows;
 };
 
-export const getAllUsersWithSpotifyIntegrations = async (): Promise<number[]> => {
+export const getAllUsersWithSpotifyIntegrations = async (): Promise<string[]> => {
   const { rows } = await pool.query(
     'SELECT DISTINCT user_id FROM music_integrations WHERE provider = $1 AND refresh_token IS NOT NULL AND is_connected = TRUE',
     ['spotify']
@@ -181,13 +186,14 @@ export const getAllUsersWithSpotifyIntegrations = async (): Promise<number[]> =>
 };
 
 export const updateMusicIntegrationTokens = async (
-  userId: number,
+  userId: string,
   provider: string,
   tokens: {
     access_token?: string;
     refresh_token?: string;
     token_expires_at?: Date;
     has_valid_token?: boolean;
+    is_connected?: boolean;
     last_sync_at?: Date;
   }
 ): Promise<MusicIntegration | null> => {
@@ -197,7 +203,8 @@ export const updateMusicIntegrationTokens = async (
          refresh_token = COALESCE($4, refresh_token),
          token_expires_at = COALESCE($5, token_expires_at),
          has_valid_token = COALESCE($6, has_valid_token),
-         last_sync_at = COALESCE($7, last_sync_at),
+         is_connected = COALESCE($7, is_connected),
+         last_sync_at = COALESCE($8, last_sync_at),
          updated_at = CURRENT_TIMESTAMP
      WHERE user_id = $1 AND provider = $2
      RETURNING *`,
@@ -208,6 +215,7 @@ export const updateMusicIntegrationTokens = async (
       tokens.refresh_token ?? null,
       tokens.token_expires_at ?? null,
       tokens.has_valid_token ?? null,
+      tokens.is_connected ?? null,
       tokens.last_sync_at ?? null,
     ]
   );
@@ -215,7 +223,7 @@ export const updateMusicIntegrationTokens = async (
 };
 
 export const updateMusicIntegration = async (
-  userId: number,
+  userId: string,
   provider: string,
   updates: {
     display_name?: string;
@@ -224,6 +232,7 @@ export const updateMusicIntegration = async (
     refresh_token?: string;
     token_expires_at?: Date;
     has_valid_token?: boolean;
+    is_connected?: boolean;
     last_sync_at?: Date;
   }
 ): Promise<MusicIntegration | null> => {
@@ -235,7 +244,8 @@ export const updateMusicIntegration = async (
          refresh_token = COALESCE($6, refresh_token),
          token_expires_at = COALESCE($7, token_expires_at),
          has_valid_token = COALESCE($8, has_valid_token),
-         last_sync_at = COALESCE($9, last_sync_at),
+         is_connected = COALESCE($9, is_connected),
+         last_sync_at = COALESCE($10, last_sync_at),
          updated_at = CURRENT_TIMESTAMP
      WHERE user_id = $1 AND provider = $2
      RETURNING *`,
@@ -248,6 +258,7 @@ export const updateMusicIntegration = async (
       updates.refresh_token ?? null,
       updates.token_expires_at ?? null,
       updates.has_valid_token ?? null,
+      updates.is_connected ?? null,
       updates.last_sync_at ?? null,
     ]
   );
@@ -255,7 +266,7 @@ export const updateMusicIntegration = async (
 };
 
 export const disconnectMusicIntegration = async (
-  userId: number,
+  userId: string,
   provider: string
 ): Promise<void> => {
   await pool.query(
@@ -270,7 +281,7 @@ export const disconnectMusicIntegration = async (
   );
 };
 
-export const deleteMusicIntegration = async (userId: number, provider: string): Promise<void> => {
+export const deleteMusicIntegration = async (userId: string, provider: string): Promise<void> => {
   await pool.query('DELETE FROM music_integrations WHERE user_id = $1 AND provider = $2', [
     userId,
     provider,
@@ -350,7 +361,7 @@ export const updateUserTokens = async (
 };
 
 export const getUserSpotifyTokens = async (
-  userId: number
+  userId: string
 ): Promise<{ spotify_access_token: string; spotify_refresh_token: string } | null> => {
   const integration = await findMusicIntegration(userId, 'spotify');
   if (!integration?.access_token || !integration?.refresh_token) {
@@ -364,10 +375,10 @@ export const getUserSpotifyTokens = async (
 };
 
 // Post queries
-export const createPost = async (postData: CreatePostData): Promise<Post> => {
+export const createPost = async (postData: CreatePostData) => {
   const { rows } = await pool.query(
-    `INSERT INTO posts (user_id, track_id, track_name, artist_name, album_name, track_image, track_preview_url, track_external_url, feeling, caption, is_currently_listening) 
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) 
+    `INSERT INTO posts (user_id, track_id, track_name, artist_name, album_name, track_image, track_preview_url, track_external_url, track_duration, feeling, caption, is_currently_listening) 
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) 
      RETURNING *`,
     [
       postData.user_id,
@@ -378,12 +389,15 @@ export const createPost = async (postData: CreatePostData): Promise<Post> => {
       postData.track_image,
       postData.track_preview_url,
       postData.track_external_url,
+      postData.track_duration || null,
       postData.feeling,
       postData.caption,
       postData.is_currently_listening || false,
     ]
   );
-  return rows[0];
+  // Fetch username from users table
+  const userRows = await pool.query('SELECT username FROM users WHERE id = $1', [postData.user_id]);
+  return { ...rows[0], username: userRows.rows[0]?.username || null };
 };
 
 export const getPosts = async (limit = 20, offset = 0) => {
@@ -392,6 +406,7 @@ export const getPosts = async (limit = 20, offset = 0) => {
     SELECT 
       p.*,
       u.display_name,
+      u.username,
       u.avatar_url,
       COUNT(DISTINCT r.id) as reaction_count,
       COUNT(DISTINCT c.id) as comment_count,
@@ -400,7 +415,7 @@ export const getPosts = async (limit = 20, offset = 0) => {
     JOIN users u ON p.user_id = u.id
     LEFT JOIN reactions r ON p.id = r.post_id
     LEFT JOIN comments c ON p.id = c.post_id
-    GROUP BY p.id, u.display_name, u.avatar_url
+    GROUP BY p.id, u.display_name, u.username, u.avatar_url
     ORDER BY p.created_at DESC
     LIMIT $1 OFFSET $2
   `,
@@ -409,21 +424,29 @@ export const getPosts = async (limit = 20, offset = 0) => {
   return rows;
 };
 
-export const getUserPosts = async (userId: number, limit = 20, offset = 0) => {
+// Get feed posts (posts from users that the current user follows, plus their own posts)
+export const getFeedPosts = async (userId: string, limit = 20, offset = 0) => {
   const { rows } = await pool.query(
     `
     SELECT 
       p.*,
       u.display_name,
+      u.username,
       u.avatar_url,
       COUNT(DISTINCT r.id) as reaction_count,
-      COUNT(DISTINCT c.id) as comment_count
+      COUNT(DISTINCT c.id) as comment_count,
+      ARRAY_AGG(DISTINCT r.reaction_type) FILTER (WHERE r.reaction_type IS NOT NULL) as reaction_types
     FROM posts p
     JOIN users u ON p.user_id = u.id
     LEFT JOIN reactions r ON p.id = r.post_id
     LEFT JOIN comments c ON p.id = c.post_id
-    WHERE p.user_id = $1
-    GROUP BY p.id, u.display_name, u.avatar_url
+    WHERE p.user_id = $1 
+       OR p.user_id IN (
+         SELECT following_id 
+         FROM follows 
+         WHERE follower_id = $1
+       )
+    GROUP BY p.id, u.display_name, u.username, u.avatar_url
     ORDER BY p.created_at DESC
     LIMIT $2 OFFSET $3
   `,
@@ -432,7 +455,31 @@ export const getUserPosts = async (userId: number, limit = 20, offset = 0) => {
   return rows;
 };
 
-export const getUserPostCount = async (userId: number): Promise<number> => {
+export const getUserPosts = async (userId: string, limit = 20, offset = 0) => {
+  const { rows } = await pool.query(
+    `
+    SELECT 
+      p.*,
+      u.display_name,
+      u.username,
+      u.avatar_url,
+      COUNT(DISTINCT r.id) as reaction_count,
+      COUNT(DISTINCT c.id) as comment_count
+    FROM posts p
+    JOIN users u ON p.user_id = u.id
+    LEFT JOIN reactions r ON p.id = r.post_id
+    LEFT JOIN comments c ON p.id = c.post_id
+    WHERE p.user_id = $1
+    GROUP BY p.id, u.display_name, u.username, u.avatar_url
+    ORDER BY p.created_at DESC
+    LIMIT $2 OFFSET $3
+  `,
+    [userId, limit, offset]
+  );
+  return rows;
+};
+
+export const getUserPostCount = async (userId: string): Promise<number> => {
   const { rows } = await pool.query('SELECT COUNT(*) as count FROM posts WHERE user_id = $1', [
     userId,
   ]);
@@ -446,9 +493,9 @@ export const getPostById = async (postId: number): Promise<Post | null> => {
 
 export const updatePost = async (
   postId: number,
-  userId: number,
+  userId: string,
   updates: { feeling?: string; caption?: string }
-): Promise<Post> => {
+) => {
   const { feeling, caption } = updates;
   const { rows } = await pool.query(
     `UPDATE posts 
@@ -462,10 +509,12 @@ export const updatePost = async (
   if (rows.length === 0) {
     throw new Error('Post not found or unauthorized');
   }
-  return rows[0];
+  // Fetch username from users table
+  const userRows = await pool.query('SELECT username FROM users WHERE id = $1', [userId]);
+  return { ...rows[0], username: userRows.rows[0]?.username || null };
 };
 
-export const deletePost = async (postId: number, userId: number): Promise<void> => {
+export const deletePost = async (postId: number, userId: string): Promise<void> => {
   const { rows } = await pool.query(
     'DELETE FROM posts WHERE id = $1 AND user_id = $2 RETURNING id',
     [postId, userId]
@@ -476,7 +525,7 @@ export const deletePost = async (postId: number, userId: number): Promise<void> 
 };
 
 // Reaction queries
-export const toggleLike = async (userId: number, postId: number) => {
+export const toggleLike = async (userId: string, postId: number) => {
   const { rows: existingLike } = await pool.query(
     'SELECT id FROM reactions WHERE user_id = $1 AND post_id = $2 AND reaction_type = $3',
     [userId, postId, 'like']
@@ -499,12 +548,13 @@ export const toggleLike = async (userId: number, postId: number) => {
   }
 };
 
-export const getUserLikedPosts = async (userId: number, limit = 20, offset = 0) => {
+export const getUserLikedPosts = async (userId: string, limit = 20, offset = 0) => {
   const { rows } = await pool.query(
     `
     SELECT 
       p.*,
       u.display_name,
+      u.username,
       u.avatar_url,
       COUNT(DISTINCT r2.id) as reaction_count,
       COUNT(DISTINCT c.id) as comment_count
@@ -514,11 +564,56 @@ export const getUserLikedPosts = async (userId: number, limit = 20, offset = 0) 
     LEFT JOIN reactions r2 ON p.id = r2.post_id
     LEFT JOIN comments c ON p.id = c.post_id
     WHERE r.user_id = $1 AND r.reaction_type = 'like'
-    GROUP BY p.id, u.display_name, u.avatar_url, r.created_at
+    GROUP BY p.id, u.display_name, u.username, u.avatar_url, r.created_at
     ORDER BY r.created_at DESC
     LIMIT $2 OFFSET $3
   `,
     [userId, limit, offset]
   );
   return rows;
+};
+
+// Follow queries
+export const followUser = async (followerId: string, followingId: string): Promise<Follow> => {
+  const { rows } = await pool.query(
+    `INSERT INTO follows (follower_id, following_id) 
+     VALUES ($1, $2) 
+     ON CONFLICT (follower_id, following_id) DO NOTHING
+     RETURNING *`,
+    [followerId, followingId]
+  );
+  return rows[0];
+};
+
+export const unfollowUser = async (followerId: string, followingId: string): Promise<void> => {
+  await pool.query(
+    `DELETE FROM follows 
+     WHERE follower_id = $1 AND following_id = $2`,
+    [followerId, followingId]
+  );
+};
+
+export const isFollowing = async (followerId: string, followingId: string): Promise<boolean> => {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM follows 
+     WHERE follower_id = $1 AND following_id = $2`,
+    [followerId, followingId]
+  );
+  return rows.length > 0;
+};
+
+export const getFollowersCount = async (userId: string): Promise<number> => {
+  const { rows } = await pool.query(
+    `SELECT COUNT(*) as count FROM follows WHERE following_id = $1`,
+    [userId]
+  );
+  return parseInt(rows[0].count, 10);
+};
+
+export const getFollowingCount = async (userId: string): Promise<number> => {
+  const { rows } = await pool.query(
+    `SELECT COUNT(*) as count FROM follows WHERE follower_id = $1`,
+    [userId]
+  );
+  return parseInt(rows[0].count, 10);
 };

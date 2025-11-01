@@ -38,7 +38,12 @@ export interface AppleUserInfo {
 
 export class AuthService {
   // Email Authentication
-  async signUpWithEmail(email: string, password: string, displayName: string): Promise<AuthResult> {
+  async signUpWithEmail(
+    email: string,
+    password: string,
+    displayName: string,
+    username: string
+  ): Promise<AuthResult> {
     // Check if user already exists
     const existingUser = await findUserByEmail(email);
     if (existingUser) {
@@ -54,6 +59,7 @@ export class AuthService {
       email,
       password_hash: passwordHash,
       display_name: displayName,
+      username,
       email_verified: false, // TODO: Implement email verification
     };
 
@@ -222,7 +228,7 @@ export class AuthService {
     } as jwt.SignOptions);
   }
 
-  verifyJWT(token: string): { userId: number; email?: string; authProvider: string } {
+  verifyJWT(token: string): { userId: string; email?: string; authProvider: string } {
     try {
       const decoded = jwt.verify(token, JWT_SECRET) as any;
       return {

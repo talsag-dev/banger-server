@@ -4,8 +4,11 @@ import { postsController } from '../controllers/postsController';
 
 const router = express.Router();
 
-// Get all posts (feed)
-router.get('/', postsController.feed as any);
+// Get feed (posts from followed users + own posts) - requires auth
+router.get('/feed', auth, postsController.feed as any);
+
+// Get all posts (public, no auth required)
+router.get('/', postsController.all as any);
 
 // Get posts by user
 router.get('/user/:userId', auth, postsController.byUser as any);

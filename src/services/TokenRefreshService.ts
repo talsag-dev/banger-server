@@ -89,7 +89,7 @@ export class TokenRefreshService {
   /**
    * Refresh token for a specific user's Spotify integration
    */
-  async refreshSpotifyTokenForUser(userId: number): Promise<boolean> {
+  async refreshSpotifyTokenForUser(userId: string): Promise<boolean> {
     try {
       const integrations = await getUserMusicIntegrations(userId);
       const spotifyIntegration = integrations.find((i) => i.provider === 'spotify');

@@ -1,6 +1,6 @@
 // Database types
 export interface User {
-  id: number;
+  id: string; // UUID
   // Legacy Spotify fields (for backward compatibility)
   spotify_id?: string;
   spotify_access_token?: string;
@@ -29,7 +29,7 @@ export interface User {
 
 export interface MusicIntegration {
   id: number;
-  user_id: number;
+  user_id: string; // UUID
   provider: 'spotify' | 'apple-music' | 'youtube-music' | 'soundcloud';
   provider_user_id: string;
   display_name?: string;
@@ -47,14 +47,16 @@ export interface MusicIntegration {
 
 export interface Post {
   id: number;
-  user_id: number;
+  user_id: string; // UUID
   track_id: string;
   track_name: string;
+  username?: string;
   artist_name: string;
   album_name?: string;
   track_image?: string;
   track_preview_url?: string;
   track_external_url?: string;
+  track_duration?: number; // in seconds
   feeling?: string;
   caption?: string;
   is_currently_listening: boolean;
@@ -64,7 +66,7 @@ export interface Post {
 
 export interface Reaction {
   id: number;
-  user_id: number;
+  user_id: string; // UUID
   post_id: number;
   reaction_type: string;
   created_at: Date;
@@ -72,7 +74,7 @@ export interface Reaction {
 
 export interface Comment {
   id: number;
-  user_id: number;
+  user_id: string; // UUID
   post_id: number;
   content: string;
   created_at: Date;
@@ -81,8 +83,8 @@ export interface Comment {
 
 export interface Follow {
   id: number;
-  follower_id: number;
-  following_id: number;
+  follower_id: string; // UUID
+  following_id: string; // UUID
   created_at: Date;
 }
 
@@ -102,7 +104,7 @@ export interface CreateUserData {
 }
 
 export interface CreateMusicIntegrationData {
-  user_id: number;
+  user_id: string; // UUID
   provider: 'spotify' | 'apple-music' | 'youtube-music' | 'soundcloud';
   provider_user_id: string;
   display_name?: string;
@@ -113,7 +115,7 @@ export interface CreateMusicIntegrationData {
 }
 
 export interface CreatePostData {
-  user_id: number;
+  user_id: string; // UUID
   track_id: string;
   track_name: string;
   artist_name: string;
@@ -121,19 +123,20 @@ export interface CreatePostData {
   track_image?: string;
   track_preview_url?: string;
   track_external_url?: string;
+  track_duration?: number; // in seconds
   feeling?: string;
   caption?: string;
   is_currently_listening?: boolean;
 }
 
 export interface CreateReactionData {
-  user_id: number;
+  user_id: string; // UUID
   post_id: number;
   reaction_type: string;
 }
 
 export interface CreateCommentData {
-  user_id: number;
+  user_id: string; // UUID
   post_id: number;
   content: string;
 }

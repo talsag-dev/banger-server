@@ -7,13 +7,21 @@ import { findUserById, getUserMusicIntegrations } from '../database/queries';
 export const authController = {
   signup: async (req: Request, res: Response) => {
     try {
-      const { email, password, displayName } = req.body;
-      if (!email || !password || !displayName) {
+      const { email, password, displayName, username } = req.body;
+      if (!email || !password || !displayName || !username) {
         return res
           .status(400)
-          .json({ success: false, error: 'Email, password, and display name are required' });
+          .json({
+            success: false,
+            error: 'Email, password, display name, and username are required',
+          });
       }
-      const { user, token } = await authService.signUpWithEmail(email, password, displayName);
+      const { user, token } = await authService.signUpWithEmail(
+        email,
+        password,
+        displayName,
+        username
+      );
       res.cookie('auth_token', token, authService.generateCookieOptions());
       return res.status(200).json({
         success: true,
@@ -257,6 +265,7 @@ export const authController = {
           user: {
             id: user.id,
             email: user.email,
+            username: user.username,
             displayName: user.display_name,
             avatar: user.avatar_url,
             bio: user.bio,

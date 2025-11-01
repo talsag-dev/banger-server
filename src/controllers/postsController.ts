@@ -3,6 +3,7 @@ import { AuthenticatedRequest } from '../middleware/auth';
 import {
   createPost,
   getPosts,
+  getFeedPosts,
   getUserPosts,
   getUserLikedPosts,
   toggleLike,
@@ -10,6 +11,7 @@ import {
   deletePost,
   getPostById,
 } from '../database/queries';
+import { Post } from '../database/types';
 
 // Helper to detect platform from URL
 const detectPlatform = (
@@ -25,16 +27,17 @@ const detectPlatform = (
 };
 
 // Helper to transform DB post to frontend format
-const transformPost = (dbPost: any) => ({
+const transformPost = (dbPost: Post) => ({
   id: dbPost.id.toString(),
   userId: dbPost.user_id.toString(),
+  username: dbPost.username || dbPost.user_id.toString(), // Fallback to userId if username is null
   track: {
     id: dbPost.track_id,
     title: dbPost.track_name,
     artist: dbPost.artist_name,
     album: dbPost.album_name || 'Unknown Album',
     albumCover: dbPost.track_image || 'https://via.placeholder.com/300?text=No+Image',
-    duration: 0,
+    duration: dbPost.track_duration || 0, // in seconds
     platform: detectPlatform(dbPost.track_external_url),
     externalUrl: dbPost.track_external_url || '',
     previewUrl: dbPost.track_preview_url || undefined,
@@ -51,7 +54,27 @@ const transformPost = (dbPost: any) => ({
 });
 
 export const postsController = {
-  feed: async (req: Request, res: Response) => {
+  // Feed endpoint - returns posts from followed users + own posts (requires auth)
+  feed: async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const userId = req.user?.dbUser?.id;
+      if (!userId) {
+        return res.status(401).json({ success: false, error: 'User not authenticated' });
+      }
+
+      const limit = parseInt(req.query.limit as string) || 20;
+      const offset = parseInt(req.query.offset as string) || 0;
+      const dbPosts = await getFeedPosts(userId, limit, offset);
+      const posts = dbPosts.map(transformPost);
+      return res.status(200).json({ success: true, data: { posts } });
+    } catch (error: any) {
+      console.error('Feed error:', error);
+      return res.status(500).json({ success: false, error: 'Failed to fetch feed' });
+    }
+  },
+
+  // All posts endpoint - returns all posts (no auth required, for public browsing)
+  all: async (req: Request, res: Response) => {
     try {
       const limit = parseInt(req.query.limit as string) || 20;
       const offset = parseInt(req.query.offset as string) || 0;
@@ -65,9 +88,11 @@ export const postsController = {
 
   byUser: async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const userId = parseInt(req.params.userId, 10);
-      if (Number.isNaN(userId)) {
-        return res.status(400).json({ success: false, error: 'Invalid user ID' });
+      const userId = req.params.userId;
+      // Validate UUID format (basic check)
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!uuidRegex.test(userId)) {
+        return res.status(400).json({ success: false, error: 'Invalid user ID format' });
       }
 
       const limit = parseInt(req.query.limit as string) || 20;
@@ -82,9 +107,11 @@ export const postsController = {
 
   likedByUser: async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const userId = parseInt(req.params.userId, 10);
-      if (Number.isNaN(userId)) {
-        return res.status(400).json({ success: false, error: 'Invalid user ID' });
+      const userId = req.params.userId;
+      // Validate UUID format (basic check)
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!uuidRegex.test(userId)) {
+        return res.status(400).json({ success: false, error: 'Invalid user ID format' });
       }
 
       const limit = parseInt(req.query.limit as string) || 20;
@@ -107,6 +134,7 @@ export const postsController = {
         track_image,
         track_preview_url,
         track_external_url,
+        track_duration,
         feeling,
         caption,
         is_currently_listening,
@@ -130,6 +158,7 @@ export const postsController = {
         track_image,
         track_preview_url,
         track_external_url,
+        track_duration,
         feeling,
         caption,
         is_currently_listening: is_currently_listening || false,

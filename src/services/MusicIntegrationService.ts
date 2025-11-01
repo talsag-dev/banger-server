@@ -30,7 +30,7 @@ export interface SpotifyUserProfile {
 
 export class MusicIntegrationService {
   // Spotify Integration
-  async connectSpotify(userId: number, authCode: string): Promise<MusicIntegration> {
+  async connectSpotify(userId: string, authCode: string): Promise<MusicIntegration> {
     try {
       // Exchange code for tokens
       const tokenResponse = await this.getSpotifyTokens(authCode);
@@ -53,6 +53,7 @@ export class MusicIntegrationService {
           refresh_token: tokenResponse.refresh_token || existingIntegration.refresh_token,
           token_expires_at: tokenExpiresAt,
           has_valid_token: true,
+          is_connected: true,
           last_sync_at: new Date(),
         })) as MusicIntegration;
       } else {
@@ -76,7 +77,7 @@ export class MusicIntegrationService {
     }
   }
 
-  async refreshSpotifyToken(userId: number): Promise<MusicIntegration | null> {
+  async refreshSpotifyToken(userId: string): Promise<MusicIntegration | null> {
     const integration = await findMusicIntegration(userId, 'spotify');
     if (!integration?.refresh_token) {
       throw new Error('No Spotify refresh token found');
@@ -107,14 +108,16 @@ export class MusicIntegrationService {
         refresh_token: tokenData.refresh_token || integration.refresh_token,
         token_expires_at: tokenExpiresAt,
         has_valid_token: true,
+        is_connected: true,
         last_sync_at: new Date(),
       });
     } catch (error) {
       console.error('Error refreshing Spotify token:', error);
 
-      // Mark token as invalid
+      // Mark token as invalid and disconnect integration
       await updateMusicIntegrationTokens(userId, 'spotify', {
         has_valid_token: false,
+        is_connected: false,
       });
 
       throw new Error('Failed to refresh Spotify token');
@@ -152,41 +155,101 @@ export class MusicIntegrationService {
     return response.data;
   }
 
-  async connectAppleMusic(userId: number, authData: any): Promise<MusicIntegration> {
+  /**
+   * Validates a Spotify access token by making a lightweight API call
+   * Returns true if token is valid, false otherwise
+   */
+  private async validateSpotifyToken(accessToken: string): Promise<boolean> {
+    try {
+      const response = await axios.get('https://api.spotify.com/v1/me', {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        timeout: 5000, // 5 second timeout
+      });
+      return response.status === 200;
+    } catch (error: any) {
+      // 401 means unauthorized/invalid token
+      if (error.response?.status === 401) {
+        return false;
+      }
+      // For other errors (network issues, etc), we'll assume token might still be valid
+      // and let the caller decide based on expiration
+      console.warn(
+        'Error validating Spotify token (non-401):',
+        error.response?.status || error.message
+      );
+      return true; // Assume valid if we can't verify (to avoid false negatives)
+    }
+  }
+
+  async connectAppleMusic(userId: string, authData: any): Promise<MusicIntegration> {
     throw new Error('Apple Music integration not yet implemented');
   }
 
-  async connectYouTubeMusic(userId: number, authData: any): Promise<MusicIntegration> {
+  async connectYouTubeMusic(userId: string, authData: any): Promise<MusicIntegration> {
     throw new Error('YouTube Music integration not yet implemented');
   }
 
-  async connectSoundCloud(userId: number, authData: any): Promise<MusicIntegration> {
+  async connectSoundCloud(userId: string, authData: any): Promise<MusicIntegration> {
     throw new Error('SoundCloud integration not yet implemented');
   }
 
-  async getUserIntegrations(userId: number): Promise<MusicIntegration[]> {
-    const integrations = await getUserMusicIntegrations(userId);
+  async getUserIntegrations(userId: string): Promise<MusicIntegration[]> {
+    const integrations = (await getUserMusicIntegrations(userId)) as MusicIntegration[];
 
-    return integrations.map((integration) => {
+    // Process integrations and validate tokens
+    const integrationPromises = integrations.map(async (integration) => {
+      let hasValidToken = integration.has_valid_token;
+
+      // Check if token is expired locally
       if (integration.token_expires_at) {
         const isExpired = new Date(integration.token_expires_at) < new Date();
         if (isExpired) {
-          return { ...integration, has_valid_token: false };
+          hasValidToken = false;
         }
       }
-      return integration;
+
+      // If we have a Spotify access token, validate it with Spotify API
+      if (integration.access_token && integration.provider === 'spotify' && hasValidToken) {
+        try {
+          const isValid = await this.validateSpotifyToken(integration.access_token);
+          if (!isValid) {
+            hasValidToken = false;
+            // Update database to reflect invalid token
+            await updateMusicIntegrationTokens(userId, 'spotify', {
+              has_valid_token: false,
+              is_connected: false,
+            });
+          }
+        } catch (error) {
+          // If validation fails (network error, etc), use local check result
+          console.error('Error validating Spotify token:', error);
+        }
+      }
+
+      // Integration is connected only if token is valid and present
+      const isConnected = hasValidToken && !!integration.access_token;
+
+      return {
+        ...integration,
+        has_valid_token: hasValidToken,
+        is_connected: isConnected,
+      };
     });
+
+    return Promise.all(integrationPromises);
   }
 
-  async getIntegration(userId: number, provider: MusicProvider): Promise<MusicIntegration | null> {
+  async getIntegration(userId: string, provider: MusicProvider): Promise<MusicIntegration | null> {
     return await findMusicIntegration(userId, provider);
   }
 
-  async disconnectProvider(userId: number, provider: MusicProvider): Promise<void> {
+  async disconnectProvider(userId: string, provider: MusicProvider): Promise<void> {
     await disconnectMusicIntegration(userId, provider);
   }
 
-  async removeIntegration(userId: number, provider: MusicProvider): Promise<void> {
+  async removeIntegration(userId: string, provider: MusicProvider): Promise<void> {
     await deleteMusicIntegration(userId, provider);
   }
 

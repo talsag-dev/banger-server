@@ -1,4 +1,19 @@
-import { Pool } from 'pg';
+import { Pool, types } from 'pg';
+
+// Configure pg to parse TIMESTAMP (without timezone) as UTC
+// OID 1114 = TIMESTAMP (without timezone)
+// This ensures all timestamps from PostgreSQL are treated as UTC
+types.setTypeParser(1114, (val: string) => {
+  if (!val) return null;
+
+  // If it already has timezone info (shouldn't happen for TIMESTAMP, but be safe)
+  if (val.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(val)) {
+    return new Date(val);
+  }
+
+  // No timezone - treat as UTC (PostgreSQL TIMESTAMP columns are stored as UTC)
+  return new Date(`${val}Z`);
+});
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,

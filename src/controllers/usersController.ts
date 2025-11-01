@@ -1,6 +1,16 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth';
-import { findUserById, getUserPostCount, findMusicIntegration } from '../database/queries';
+import {
+  findUserById,
+  updateUser,
+  getUserPostCount,
+  findMusicIntegration,
+  followUser,
+  unfollowUser,
+  isFollowing,
+  getFollowersCount,
+  getFollowingCount,
+} from '../database/queries';
 import { musicIntegrationService } from '../services/MusicIntegrationService';
 import axios from 'axios';
 
@@ -18,9 +28,11 @@ interface Playlist {
 export const usersController = {
   getProfile: async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const userId = parseInt(req.params.userId, 10);
-      if (Number.isNaN(userId)) {
-        return res.status(400).json({ success: false, error: 'Invalid user ID' });
+      const userId = req.params.userId;
+      // Validate UUID format (basic check)
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!uuidRegex.test(userId)) {
+        return res.status(400).json({ success: false, error: 'Invalid user ID format' });
       }
       const user = await findUserById(userId);
 
@@ -34,9 +46,16 @@ export const usersController = {
       // Get post count
       const postsCount = await getUserPostCount(userId);
 
-      // Get followers/following counts (placeholder - implement when follow system exists)
-      const followersCount = 0; // TODO: Implement getFollowersCount query
-      const followingCount = 0; // TODO: Implement getFollowingCount query
+      // Get followers/following counts
+      const followersCount = await getFollowersCount(userId);
+      const followingCount = await getFollowingCount(userId);
+
+      // Check if current user is following this profile user
+      const currentUserId = req.user?.dbUser?.id;
+      let isFollowingUser = false;
+      if (currentUserId && currentUserId !== userId) {
+        isFollowingUser = await isFollowing(currentUserId, userId);
+      }
 
       // Build connected platforms array
       const connectedPlatforms = [
@@ -84,7 +103,7 @@ export const usersController = {
           followersCount,
           followingCount,
           postsCount,
-          isFollowing: false, // Always false for own profile
+          isFollowing: isFollowingUser,
           spotifyConnected:
             integrations.find((i) => i.provider === 'spotify')?.is_connected || false,
           appleConnected:
@@ -109,9 +128,11 @@ export const usersController = {
 
   getPlaylists: async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const userId = parseInt(req.params.userId, 10);
-      if (Number.isNaN(userId)) {
-        return res.status(400).json({ success: false, error: 'Invalid user ID' });
+      const userId = req.params.userId;
+      // Validate UUID format (basic check)
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!uuidRegex.test(userId)) {
+        return res.status(400).json({ success: false, error: 'Invalid user ID format' });
       }
 
       const allPlaylists: Playlist[] = [];
@@ -156,6 +177,137 @@ export const usersController = {
       });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: 'Failed to fetch playlists' });
+    }
+  },
+
+  follow: async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const followingId = req.params.userId;
+      // Validate UUID format (basic check)
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!uuidRegex.test(followingId)) {
+        return res.status(400).json({ success: false, error: 'Invalid user ID format' });
+      }
+
+      const followerId = req.user?.dbUser?.id;
+      if (!followerId) {
+        return res.status(401).json({ success: false, error: 'User not authenticated' });
+      }
+
+      if (followerId === followingId) {
+        return res.status(400).json({ success: false, error: 'Cannot follow yourself' });
+      }
+
+      // Check if user exists
+      const user = await findUserById(followingId);
+      if (!user) {
+        return res.status(404).json({ success: false, error: 'User not found' });
+      }
+
+      await followUser(followerId, followingId);
+      const followersCount = await getFollowersCount(followingId);
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          isFollowing: true,
+          followersCount,
+        },
+      });
+    } catch (error: any) {
+      console.error('Follow error:', error);
+      return res.status(500).json({ success: false, error: 'Failed to follow user' });
+    }
+  },
+
+  unfollow: async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const followingId = req.params.userId;
+      // Validate UUID format (basic check)
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!uuidRegex.test(followingId)) {
+        return res.status(400).json({ success: false, error: 'Invalid user ID format' });
+      }
+
+      const followerId = req.user?.dbUser?.id;
+      if (!followerId) {
+        return res.status(401).json({ success: false, error: 'User not authenticated' });
+      }
+
+      await unfollowUser(followerId, followingId);
+      const followersCount = await getFollowersCount(followingId);
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          isFollowing: false,
+          followersCount,
+        },
+      });
+    } catch (error: any) {
+      console.error('Unfollow error:', error);
+      return res.status(500).json({ success: false, error: 'Failed to unfollow user' });
+    }
+  },
+
+  updateProfile: async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const userId = req.user?.dbUser?.id;
+      if (!userId) {
+        return res.status(401).json({ success: false, error: 'User not authenticated' });
+      }
+
+      const { username, displayName, bio } = req.body;
+
+      // Only update fields that are provided
+      const updateData: {
+        username?: string;
+        display_name?: string;
+        bio?: string;
+      } = {};
+
+      if (username !== undefined) {
+        if (!username.trim()) {
+          return res.status(400).json({ success: false, error: 'Username cannot be empty' });
+        }
+        updateData.username = username.trim();
+      }
+
+      if (displayName !== undefined) {
+        updateData.display_name = displayName.trim() || null;
+      }
+
+      if (bio !== undefined) {
+        updateData.bio = bio.trim() || null;
+      }
+
+      if (Object.keys(updateData).length === 0) {
+        return res.status(400).json({ success: false, error: 'No fields to update' });
+      }
+
+      const updatedUser = await updateUser(userId, updateData);
+
+      if (!updatedUser) {
+        return res.status(404).json({ success: false, error: 'User not found' });
+      }
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          user: {
+            id: updatedUser.id,
+            email: updatedUser.email,
+            username: updatedUser.username,
+            displayName: updatedUser.display_name,
+            avatar: updatedUser.avatar_url,
+            bio: updatedUser.bio,
+            authProvider: updatedUser.auth_provider,
+          },
+        },
+      });
+    } catch (error: any) {
+      console.error('Update profile error:', error);
+      return res.status(500).json({ success: false, error: 'Failed to update profile' });
     }
   },
 };

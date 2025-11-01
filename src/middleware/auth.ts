@@ -6,7 +6,7 @@ import { config } from '../config';
 
 export interface AuthenticatedRequest extends Request {
   user?: {
-    userId: number;
+    userId: string; // UUID
     email?: string;
     authProvider: string;
     dbUser?: any; // Database user record

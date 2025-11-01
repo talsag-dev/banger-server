@@ -1,4 +1,5 @@
 import { pool } from './connection';
+import { runMigrations } from './migrations';
 import fs from 'fs';
 import path from 'path';
 
@@ -25,13 +26,17 @@ export const initializeDatabase = async (): Promise<void> => {
       console.log('✅ Database schema created successfully');
     } else {
       console.log(`✅ Database already initialized with ${rows.length} tables`);
-      console.log('⚠️ Skipping schema updates (using existing tables)');
     }
+
+    // Always run migrations (they track their own state)
+    await runMigrations();
   } catch (error) {
     console.error('❌ Database initialization failed:', error);
     throw error;
   }
-};export const closeDatabase = async (): Promise<void> => {
+};
+
+export const closeDatabase = async (): Promise<void> => {
   await pool.end();
   console.log('🔌 Database connection closed');
 };

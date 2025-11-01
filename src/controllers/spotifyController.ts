@@ -84,7 +84,7 @@ export const spotifyController = {
         return res.redirect(`${config.frontendUrl}/auth/error?error=missing_params`);
       }
 
-      let userIdFromState: number | null = null;
+      let userIdFromState: string | null = null;
       try {
         const stateDecoded = jwt.verify(state, config.jwtSecret) as any;
         userIdFromState = stateDecoded.userId ?? null;
@@ -93,7 +93,7 @@ export const spotifyController = {
       }
 
       // Fallback to cookie if present
-      let effectiveUserId: number | null = userIdFromState;
+      let effectiveUserId: string | null = userIdFromState;
       const token = req.cookies?.auth_token;
       if (!effectiveUserId && token) {
         try {

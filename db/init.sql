@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS posts (
     track_image TEXT,
     track_preview_url TEXT,
     track_external_url TEXT,
+    track_duration INTEGER,
     feeling VARCHAR(50),
     caption TEXT,
     is_currently_listening BOOLEAN DEFAULT FALSE,
