@@ -432,6 +432,13 @@ export const getUserPosts = async (userId: number, limit = 20, offset = 0) => {
   return rows;
 };
 
+export const getUserPostCount = async (userId: number): Promise<number> => {
+  const { rows } = await pool.query('SELECT COUNT(*) as count FROM posts WHERE user_id = $1', [
+    userId,
+  ]);
+  return parseInt(rows[0].count, 10) || 0;
+};
+
 // Reaction queries
 export const toggleLike = async (userId: number, postId: number) => {
   const { rows: existingLike } = await pool.query(
@@ -454,4 +461,28 @@ export const toggleLike = async (userId: number, postId: number) => {
     );
     return { liked: true };
   }
+};
+
+export const getUserLikedPosts = async (userId: number, limit = 20, offset = 0) => {
+  const { rows } = await pool.query(
+    `
+    SELECT 
+      p.*,
+      u.display_name,
+      u.avatar_url,
+      COUNT(DISTINCT r2.id) as reaction_count,
+      COUNT(DISTINCT c.id) as comment_count
+    FROM reactions r
+    JOIN posts p ON r.post_id = p.id
+    JOIN users u ON p.user_id = u.id
+    LEFT JOIN reactions r2 ON p.id = r2.post_id
+    LEFT JOIN comments c ON p.id = c.post_id
+    WHERE r.user_id = $1 AND r.reaction_type = 'like'
+    GROUP BY p.id, u.display_name, u.avatar_url, r.created_at
+    ORDER BY r.created_at DESC
+    LIMIT $2 OFFSET $3
+  `,
+    [userId, limit, offset]
+  );
+  return rows;
 };

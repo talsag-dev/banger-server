@@ -1,5 +1,12 @@
 import { Request, Response } from 'express';
-import { createPost, getPosts, getUserPosts, toggleLike } from '../database/queries';
+import { AuthenticatedRequest } from '../middleware/auth';
+import {
+  createPost,
+  getPosts,
+  getUserPosts,
+  getUserLikedPosts,
+  toggleLike,
+} from '../database/queries';
 
 export const postsController = {
   feed: async (req: Request, res: Response) => {
@@ -13,15 +20,35 @@ export const postsController = {
     }
   },
 
-  byUser: async (req: Request, res: Response) => {
+  byUser: async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const userId = parseInt(req.params.userId);
+      const userId = parseInt(req.params.userId, 10);
+      if (Number.isNaN(userId)) {
+        return res.status(400).json({ success: false, error: 'Invalid user ID' });
+      }
+
       const limit = parseInt(req.query.limit as string) || 20;
       const offset = parseInt(req.query.offset as string) || 0;
       const posts = await getUserPosts(userId, limit, offset);
       return res.status(200).json({ success: true, data: { posts } });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: 'Failed to fetch user posts' });
+    }
+  },
+
+  likedByUser: async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const userId = parseInt(req.params.userId, 10);
+      if (Number.isNaN(userId)) {
+        return res.status(400).json({ success: false, error: 'Invalid user ID' });
+      }
+
+      const limit = parseInt(req.query.limit as string) || 20;
+      const offset = parseInt(req.query.offset as string) || 0;
+      const posts = await getUserLikedPosts(userId, limit, offset);
+      return res.status(200).json({ success: true, data: { posts } });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: 'Failed to fetch liked posts' });
     }
   },
 
@@ -41,7 +68,9 @@ export const postsController = {
       } = req.body;
 
       if (!track_id || !track_name || !artist_name) {
-        return res.status(400).json({ success: false, error: 'Missing required track information' });
+        return res
+          .status(400)
+          .json({ success: false, error: 'Missing required track information' });
       }
       if (!req.user?.dbUser?.id) {
         return res.status(401).json({ success: false, error: 'User not authenticated' });
@@ -82,5 +111,3 @@ export const postsController = {
     }
   },
 };
-
-

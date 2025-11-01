@@ -8,7 +8,10 @@ const router = express.Router();
 router.get('/', postsController.feed as any);
 
 // Get posts by user
-router.get('/user/:userId', postsController.byUser as any);
+router.get('/user/:userId', auth, postsController.byUser as any);
+
+// Get liked posts by user
+router.get('/user/:userId/liked', auth, postsController.likedByUser as any);
 
 // Create a new post
 router.post('/', auth, postsController.create as any);

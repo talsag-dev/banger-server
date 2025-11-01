@@ -17,6 +17,7 @@ import cookieParser from 'cookie-parser';
 import { authRouter } from './routes/auth';
 import { spotifyRouter } from './routes/spotify';
 import { postsRouter } from './routes/posts';
+import { usersRouter } from './routes/users';
 import { errorHandler } from './middleware/errorHandler';
 import { initializeDatabase } from './database/init';
 import { config, allowedOrigins } from './config';
@@ -93,6 +94,7 @@ app.use(cookieParser());
 app.use('/api/auth', authRouter);
 app.use('/api/spotify', spotifyRouter);
 app.use('/api/posts', postsRouter);
+app.use('/api/users', usersRouter);
 
 // Health check
 app.get('/health', (req, res) => {

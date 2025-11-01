@@ -17,7 +17,6 @@ export const auth = async (req: AuthenticatedRequest, res: Response, next: NextF
   try {
     const token = req.cookies?.auth_token;
 
-    // Debug logging (only when DEBUG=true)
     if (config.debug) {
       // eslint-disable-next-line no-console
       console.log('Auth middleware - Headers:', {
