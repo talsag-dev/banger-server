@@ -10,6 +10,7 @@ import {
   isFollowing,
   getFollowersCount,
   getFollowingCount,
+  searchUsers,
 } from '../database/queries';
 import { musicIntegrationService } from '../services/MusicIntegrationService';
 import axios from 'axios';
@@ -308,6 +309,37 @@ export const usersController = {
     } catch (error: any) {
       console.error('Update profile error:', error);
       return res.status(500).json({ success: false, error: 'Failed to update profile' });
+    }
+  },
+
+  search: async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { q, limit = 20 } = req.query;
+      if (!q || typeof q !== 'string') {
+        return res.status(400).json({
+          success: false,
+          error: 'Missing search query',
+        });
+      }
+
+      const users = await searchUsers(q, parseInt(limit as string) || 20);
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          users: users.map((user) => ({
+            id: user.id,
+            username: user.username,
+            email: user.email,
+            displayName: user.display_name,
+            avatar: user.avatar_url,
+            bio: user.bio,
+          })),
+        },
+      });
+    } catch (error: any) {
+      console.error('Search users error:', error);
+      return res.status(500).json({ success: false, error: 'Failed to search users' });
     }
   },
 };

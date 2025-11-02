@@ -46,7 +46,7 @@ export interface MusicIntegration {
 }
 
 export interface Post {
-  id: number;
+  id: string; // UUID
   user_id: string; // UUID
   track_id: string;
   track_name: string;
@@ -62,6 +62,12 @@ export interface Post {
   is_currently_listening: boolean;
   created_at: Date;
   updated_at: Date;
+  reactions?: Array<{
+    id: string;
+    user_id: string;
+    reaction_type: string;
+    created_at: Date;
+  }>;
 }
 
 export interface Reaction {

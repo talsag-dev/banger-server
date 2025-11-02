@@ -19,4 +19,7 @@ router.delete('/:userId/follow', auth, usersController.unfollow as any);
 // Update current user profile (username, displayName, bio)
 router.put('/profile', auth, usersController.updateProfile as any);
 
+// Search users
+router.get('/search', auth, usersController.search as any);
+
 export { router as usersRouter };

@@ -409,8 +409,7 @@ export const getPosts = async (limit = 20, offset = 0) => {
       u.username,
       u.avatar_url,
       COUNT(DISTINCT r.id) as reaction_count,
-      COUNT(DISTINCT c.id) as comment_count,
-      ARRAY_AGG(DISTINCT r.reaction_type) FILTER (WHERE r.reaction_type IS NOT NULL) as reaction_types
+      COUNT(DISTINCT c.id) as comment_count
     FROM posts p
     JOIN users u ON p.user_id = u.id
     LEFT JOIN reactions r ON p.id = r.post_id
@@ -421,6 +420,23 @@ export const getPosts = async (limit = 20, offset = 0) => {
   `,
     [limit, offset]
   );
+
+  // Fetch reactions for each post
+  for (const post of rows) {
+    const reactionRows = await pool.query(
+      `SELECT r.id, r.user_id, r.reaction_type, r.created_at
+       FROM reactions r
+       WHERE r.post_id = $1`,
+      [post.id]
+    );
+    post.reactions = reactionRows.rows.map((r) => ({
+      id: r.id.toString(),
+      user_id: r.user_id.toString(),
+      reaction_type: r.reaction_type,
+      created_at: r.created_at,
+    }));
+  }
+
   return rows;
 };
 
@@ -434,8 +450,7 @@ export const getFeedPosts = async (userId: string, limit = 20, offset = 0) => {
       u.username,
       u.avatar_url,
       COUNT(DISTINCT r.id) as reaction_count,
-      COUNT(DISTINCT c.id) as comment_count,
-      ARRAY_AGG(DISTINCT r.reaction_type) FILTER (WHERE r.reaction_type IS NOT NULL) as reaction_types
+      COUNT(DISTINCT c.id) as comment_count
     FROM posts p
     JOIN users u ON p.user_id = u.id
     LEFT JOIN reactions r ON p.id = r.post_id
@@ -452,6 +467,23 @@ export const getFeedPosts = async (userId: string, limit = 20, offset = 0) => {
   `,
     [userId, limit, offset]
   );
+
+  // Fetch reactions for each post
+  for (const post of rows) {
+    const reactionRows = await pool.query(
+      `SELECT r.id, r.user_id, r.reaction_type, r.created_at
+       FROM reactions r
+       WHERE r.post_id = $1`,
+      [post.id]
+    );
+    post.reactions = reactionRows.rows.map((r) => ({
+      id: r.id.toString(),
+      user_id: r.user_id.toString(),
+      reaction_type: r.reaction_type,
+      created_at: r.created_at,
+    }));
+  }
+
   return rows;
 };
 
@@ -486,13 +518,13 @@ export const getUserPostCount = async (userId: string): Promise<number> => {
   return parseInt(rows[0].count, 10) || 0;
 };
 
-export const getPostById = async (postId: number): Promise<Post | null> => {
+export const getPostById = async (postId: string): Promise<Post | null> => {
   const { rows } = await pool.query('SELECT * FROM posts WHERE id = $1', [postId]);
   return rows[0] || null;
 };
 
 export const updatePost = async (
-  postId: number,
+  postId: string,
   userId: string,
   updates: { feeling?: string; caption?: string }
 ) => {
@@ -514,7 +546,7 @@ export const updatePost = async (
   return { ...rows[0], username: userRows.rows[0]?.username || null };
 };
 
-export const deletePost = async (postId: number, userId: string): Promise<void> => {
+export const deletePost = async (postId: string, userId: string): Promise<void> => {
   const { rows } = await pool.query(
     'DELETE FROM posts WHERE id = $1 AND user_id = $2 RETURNING id',
     [postId, userId]
@@ -525,7 +557,7 @@ export const deletePost = async (postId: number, userId: string): Promise<void> 
 };
 
 // Reaction queries
-export const toggleLike = async (userId: string, postId: number) => {
+export const toggleLike = async (userId: string, postId: string) => {
   const { rows: existingLike } = await pool.query(
     'SELECT id FROM reactions WHERE user_id = $1 AND post_id = $2 AND reaction_type = $3',
     [userId, postId, 'like']
@@ -570,19 +602,50 @@ export const getUserLikedPosts = async (userId: string, limit = 20, offset = 0) 
   `,
     [userId, limit, offset]
   );
+
+  // Fetch reactions for each post
+  for (const post of rows) {
+    const reactionRows = await pool.query(
+      `SELECT r.id, r.user_id, r.reaction_type, r.created_at
+       FROM reactions r
+       WHERE r.post_id = $1`,
+      [post.id]
+    );
+    post.reactions = reactionRows.rows.map((r) => ({
+      id: r.id.toString(),
+      user_id: r.user_id.toString(),
+      reaction_type: r.reaction_type,
+      created_at: r.created_at,
+    }));
+  }
+
   return rows;
 };
 
 // Follow queries
-export const followUser = async (followerId: string, followingId: string): Promise<Follow> => {
+export const followUser = async (
+  followerId: string,
+  followingId: string
+): Promise<Follow | null> => {
+  // Check if already following
+  const { rows: existingRows } = await pool.query(
+    `SELECT * FROM follows WHERE follower_id = $1 AND following_id = $2`,
+    [followerId, followingId]
+  );
+
+  // If relationship already exists, return it
+  if (existingRows.length > 0) {
+    return existingRows[0];
+  }
+
+  // Insert new follow relationship
   const { rows } = await pool.query(
     `INSERT INTO follows (follower_id, following_id) 
      VALUES ($1, $2) 
-     ON CONFLICT (follower_id, following_id) DO NOTHING
      RETURNING *`,
     [followerId, followingId]
   );
-  return rows[0];
+  return rows[0] || null;
 };
 
 export const unfollowUser = async (followerId: string, followingId: string): Promise<void> => {
@@ -616,4 +679,27 @@ export const getFollowingCount = async (userId: string): Promise<number> => {
     [userId]
   );
   return parseInt(rows[0].count, 10);
+};
+
+export const searchUsers = async (query: string, limit = 20): Promise<User[]> => {
+  const searchTerm = `%${query.toLowerCase()}%`;
+  const { rows } = await pool.query(
+    `SELECT id, email, username, display_name, avatar_url, bio, created_at
+     FROM users
+     WHERE 
+       LOWER(username) LIKE $1 OR
+       LOWER(email) LIKE $1 OR
+       LOWER(display_name) LIKE $1
+     ORDER BY 
+       CASE 
+         WHEN LOWER(username) = $2 THEN 1
+         WHEN LOWER(username) LIKE $3 THEN 2
+         WHEN LOWER(display_name) LIKE $3 THEN 3
+         ELSE 4
+       END,
+       created_at DESC
+     LIMIT $4`,
+    [searchTerm, query.toLowerCase(), `${query.toLowerCase()}%`, limit]
+  );
+  return rows;
 };

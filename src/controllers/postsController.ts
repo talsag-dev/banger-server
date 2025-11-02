@@ -49,7 +49,15 @@ const transformPost = (dbPost: Post) => ({
     dbPost.created_at instanceof Date
       ? dbPost.created_at.toISOString()
       : new Date(dbPost.created_at).toISOString(),
-  reactions: [],
+  reactions: (dbPost.reactions || []).map((r: any) => ({
+    id: r.id?.toString() || '',
+    userId: r.user_id?.toString() || r.user_id || '',
+    type: r.reaction_type || 'like',
+    timestamp:
+      r.created_at instanceof Date
+        ? r.created_at.toISOString()
+        : new Date(r.created_at).toISOString(),
+  })),
   comments: [],
 });
 
@@ -174,11 +182,18 @@ export const postsController = {
 
   toggleLike: async (req: any, res: Response) => {
     try {
-      const postId = parseInt(req.params.postId);
+      const postId = req.params.postId;
       const userId = req.user?.dbUser?.id;
       if (!userId) {
         return res.status(401).json({ success: false, error: 'User not authenticated' });
       }
+
+      // Verify post exists
+      const existingPost = await getPostById(postId);
+      if (!existingPost) {
+        return res.status(404).json({ success: false, error: 'Post not found' });
+      }
+
       const result = await toggleLike(userId, postId);
       return res.status(200).json({ success: true, data: result });
     } catch (error: any) {
@@ -188,15 +203,11 @@ export const postsController = {
 
   update: async (req: any, res: Response) => {
     try {
-      const postId = parseInt(req.params.postId);
+      const postId = req.params.postId;
       const userId = req.user?.dbUser?.id;
 
       if (!userId) {
         return res.status(401).json({ success: false, error: 'User not authenticated' });
-      }
-
-      if (Number.isNaN(postId)) {
-        return res.status(400).json({ success: false, error: 'Invalid post ID' });
       }
 
       const { feeling, caption } = req.body;
@@ -224,15 +235,11 @@ export const postsController = {
 
   delete: async (req: any, res: Response) => {
     try {
-      const postId = parseInt(req.params.postId);
+      const postId = req.params.postId;
       const userId = req.user?.dbUser?.id;
 
       if (!userId) {
         return res.status(401).json({ success: false, error: 'User not authenticated' });
-      }
-
-      if (Number.isNaN(postId)) {
-        return res.status(400).json({ success: false, error: 'Invalid post ID' });
       }
 
       // Verify post exists and belongs to user
