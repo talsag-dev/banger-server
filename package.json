@@ -8,8 +8,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "jest",
-    "test:watch": "jest --watch",
-    "setup-certs": "./scripts/setup-certs.sh"
+    "test:watch": "jest --watch"
   },
   "dependencies": {
     "axios": "^1.6.0",

@@ -11,8 +11,11 @@ import {
   getFollowersCount,
   getFollowingCount,
   searchUsers,
+  createOrUpdatePlaylist,
+  getUserPlaylists,
 } from '../database/queries';
 import { musicIntegrationService } from '../services/MusicIntegrationService';
+import { normalizeSpotifyPlaylist } from '../database/normalize';
 import axios from 'axios';
 
 interface Playlist {
@@ -136,47 +139,63 @@ export const usersController = {
         return res.status(400).json({ success: false, error: 'Invalid user ID format' });
       }
 
-      const allPlaylists: Playlist[] = [];
+      // Check database first for cached playlists
+      const cachedPlaylists = await getUserPlaylists(userId);
 
-      // Fetch Spotify playlists
-      const spotifyIntegration = await findMusicIntegration(userId, 'spotify');
-      if (
-        spotifyIntegration?.is_connected &&
-        spotifyIntegration.access_token &&
-        spotifyIntegration.has_valid_token
-      ) {
-        try {
-          const spotifyResponse = await axios.get('https://api.spotify.com/v1/me/playlists', {
-            headers: { Authorization: `Bearer ${spotifyIntegration.access_token}` },
-            params: { limit: 50 },
-          });
+      // Check if we need to sync (for now, always sync - TODO: implement smart sync logic)
+      const shouldSync = true; // TODO: Check last_synced_at and determine if sync needed
 
-          const spotifyPlaylists: Playlist[] = (spotifyResponse.data.items || []).map((p: any) => ({
-            id: p.id,
-            name: p.name,
-            description: p.description || undefined,
-            image: p.images?.[0]?.url,
-            owner: p.owner?.display_name || p.owner?.id || 'Unknown',
-            provider: 'spotify' as const,
-            trackCount: p.tracks?.total || 0,
-            externalUrl: p.external_urls?.spotify,
-          }));
+      if (shouldSync) {
+        // Fetch Spotify playlists from API and normalize/store them
+        const spotifyIntegration = await findMusicIntegration(userId, 'spotify');
+        if (
+          spotifyIntegration?.is_connected &&
+          spotifyIntegration.access_token &&
+          spotifyIntegration.has_valid_token
+        ) {
+          try {
+            const spotifyResponse = await axios.get('https://api.spotify.com/v1/me/playlists', {
+              headers: { Authorization: `Bearer ${spotifyIntegration.access_token}` },
+              params: { limit: 50 },
+            });
 
-          allPlaylists.push(...spotifyPlaylists);
-        } catch (error: any) {
-          // Continue with other providers even if Spotify fails
+            // Normalize and upsert each playlist to database
+            for (const spotifyPlaylist of spotifyResponse.data.items || []) {
+              const normalizedPlaylist = normalizeSpotifyPlaylist(spotifyPlaylist, userId);
+              await createOrUpdatePlaylist(normalizedPlaylist);
+            }
+          } catch (error: any) {
+            console.error('Error syncing Spotify playlists:', error);
+            // Continue with cached data if API fails
+          }
         }
+
+        // TODO: Fetch Apple Music playlists when integration is available
+        // TODO: Fetch YouTube Music playlists when integration is available
+        // TODO: Fetch SoundCloud playlists when integration is available
       }
 
-      // TODO: Fetch Apple Music playlists when integration is available
-      // TODO: Fetch YouTube Music playlists when integration is available
-      // TODO: Fetch SoundCloud playlists when integration is available
+      // Return playlists from database (now synced)
+      const playlists = await getUserPlaylists(userId);
+
+      // Transform to frontend format
+      const frontendPlaylists: Playlist[] = playlists.map((p) => ({
+        id: p.external_id, // Use external_id for frontend compatibility
+        name: p.name,
+        description: p.description,
+        image: p.image_url,
+        owner: p.owner || 'Unknown',
+        provider: p.provider,
+        trackCount: p.track_count,
+        externalUrl: p.external_url,
+      }));
 
       return res.status(200).json({
         success: true,
-        data: { playlists: allPlaylists },
+        data: { playlists: frontendPlaylists },
       });
     } catch (error: any) {
+      console.error('Error fetching playlists:', error);
       return res.status(500).json({ success: false, error: 'Failed to fetch playlists' });
     }
   },
