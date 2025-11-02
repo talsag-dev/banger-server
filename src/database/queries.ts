@@ -508,6 +508,23 @@ export const getUserPosts = async (userId: string, limit = 20, offset = 0) => {
   `,
     [userId, limit, offset]
   );
+
+  // Fetch reactions for each post
+  for (const post of rows) {
+    const reactionRows = await pool.query(
+      `SELECT r.id, r.user_id, r.reaction_type, r.created_at
+       FROM reactions r
+       WHERE r.post_id = $1`,
+      [post.id]
+    );
+    post.reactions = reactionRows.rows.map((r) => ({
+      id: r.id.toString(),
+      user_id: r.user_id.toString(),
+      reaction_type: r.reaction_type,
+      created_at: r.created_at,
+    }));
+  }
+
   return rows;
 };
 
