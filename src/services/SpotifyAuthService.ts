@@ -277,4 +277,25 @@ export class SpotifyAuthService {
       throw new Error('Failed to fetch top tracks');
     }
   }
+
+  async getTrack(trackId: string, accessToken: string): Promise<SpotifyTrack> {
+    try {
+      const response = await axios.get(`${this.apiUrl}/tracks/${trackId}`, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
+
+      return response.data;
+    } catch (error: any) {
+      if (error.response?.status === 404) {
+        throw new Error(`Track not found: ${trackId}`);
+      }
+      if (error.response?.status === 401) {
+        throw new Error('Spotify token expired');
+      }
+      console.error('Error fetching track from Spotify:', error.response?.data || error.message);
+      throw new Error('Failed to fetch track from Spotify');
+    }
+  }
 }

@@ -12,9 +12,11 @@ import {
   getPostById,
   createOrUpdateTrack,
   findTrackByProviderId,
+  findMusicIntegration,
 } from '../database/queries';
 import { Post } from '../database/types';
 import { normalizeSpotifyTrack } from '../database/normalize';
+import { SpotifyAuthService } from '../services/SpotifyAuthService';
 
 // Helper to detect platform from URL
 const detectPlatform = (
@@ -256,24 +258,62 @@ export const postsController = {
       // Normalize track data and create/update in tracks table
       const detectedProvider = provider || detectPlatform(track_external_url);
 
-      // Create normalized track data (mock Spotify track structure for now)
-      // TODO: Frontend should send proper provider track structure
-      const normalizedTrackData = normalizeSpotifyTrack({
-        id: track_id,
-        name: track_name,
-        artists: artist_name.split(',').map((name: string) => ({ id: '', name: name.trim() })),
-        album: {
-          id: '',
-          name: album_name || 'Unknown Album',
-          images: track_image ? [{ url: track_image, height: 300, width: 300 }] : [],
-        },
-        duration_ms: track_duration ? track_duration * 1000 : 0,
-        external_urls: { spotify: track_external_url || '' },
-        preview_url: track_preview_url || null,
-      });
+      // Check if track already exists in database
+      const existingTrack = await findTrackByProviderId(detectedProvider, track_id);
 
-      // Upsert track to normalized tracks table
-      const track = await createOrUpdateTrack(normalizedTrackData);
+      let track: any;
+
+      if (existingTrack) {
+        // Track exists - use it directly (no need to update unless we want fresh data)
+        track = existingTrack;
+      } else {
+        // Track doesn't exist - fetch full data from Spotify API if available
+        let spotifyTrackData = null;
+        if (detectedProvider === 'spotify') {
+          try {
+            const userId = req.user.dbUser.id;
+            const spotifyIntegration = await findMusicIntegration(userId, 'spotify');
+
+            if (
+              spotifyIntegration?.access_token &&
+              spotifyIntegration.has_valid_token &&
+              spotifyIntegration.is_connected
+            ) {
+              const spotifyAuthService = new SpotifyAuthService();
+              spotifyTrackData = await spotifyAuthService.getTrack(
+                track_id,
+                spotifyIntegration.access_token
+              );
+            }
+          } catch (error: any) {
+            // If fetching from Spotify fails, fall back to provided data
+            console.warn(
+              'Failed to fetch track from Spotify API, using provided data:',
+              error.message
+            );
+          }
+        }
+
+        // Use fetched track data if available, otherwise construct from provided data
+        const normalizedTrackData = normalizeSpotifyTrack(
+          spotifyTrackData || {
+            id: track_id,
+            name: track_name,
+            artists: artist_name.split(',').map((name: string) => ({ id: '', name: name.trim() })),
+            album: {
+              id: '',
+              name: album_name || 'Unknown Album',
+              images: track_image ? [{ url: track_image, height: 300, width: 300 }] : [],
+            },
+            duration_ms: track_duration ? track_duration * 1000 : 0,
+            external_urls: { spotify: track_external_url || '' },
+            preview_url: track_preview_url || null,
+          }
+        );
+
+        // Insert new track to normalized tracks table
+        track = await createOrUpdateTrack(normalizedTrackData);
+      }
 
       // Create post with FK to normalized track
       const postData = {

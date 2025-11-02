@@ -382,6 +382,14 @@ export const getUserSpotifyTokens = async (
   };
 };
 
+// Helper function to safely parse metadata (handles both string and object)
+const parseMetadata = (metadata: any): Record<string, any> | undefined => {
+  if (!metadata) return undefined;
+  if (typeof metadata === 'object') return metadata; // Already parsed by PostgreSQL
+  if (typeof metadata === 'string') return JSON.parse(metadata);
+  return undefined;
+};
+
 // Track queries
 export const createOrUpdateTrack = async (trackData: CreateTrackData): Promise<Track> => {
   const { rows } = await pool.query(
@@ -415,7 +423,7 @@ export const createOrUpdateTrack = async (trackData: CreateTrackData): Promise<T
   const track = rows[0];
   return {
     ...track,
-    metadata: track.metadata ? JSON.parse(track.metadata) : undefined,
+    metadata: parseMetadata(track.metadata),
   } as Track;
 };
 
@@ -425,7 +433,7 @@ export const findTrackById = async (id: string): Promise<Track | null> => {
   const track = rows[0];
   return {
     ...track,
-    metadata: track.metadata ? JSON.parse(track.metadata) : undefined,
+    metadata: parseMetadata(track.metadata),
   } as Track;
 };
 
@@ -441,7 +449,7 @@ export const findTrackByProviderId = async (
   const track = rows[0];
   return {
     ...track,
-    metadata: track.metadata ? JSON.parse(track.metadata) : undefined,
+    metadata: parseMetadata(track.metadata),
   } as Track;
 };
 
@@ -499,7 +507,7 @@ export const updateTrack = async (id: string, updates: UpdateTrackData): Promise
   const track = rows[0];
   return {
     ...track,
-    metadata: track.metadata ? JSON.parse(track.metadata) : undefined,
+    metadata: parseMetadata(track.metadata),
   } as Track;
 };
 
