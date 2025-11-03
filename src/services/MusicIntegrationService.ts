@@ -77,53 +77,6 @@ export class MusicIntegrationService {
     }
   }
 
-  async refreshSpotifyToken(userId: string): Promise<MusicIntegration | null> {
-    const integration = await findMusicIntegration(userId, 'spotify');
-    if (!integration?.refresh_token) {
-      throw new Error('No Spotify refresh token found');
-    }
-
-    try {
-      const response = await axios.post(
-        'https://accounts.spotify.com/api/token',
-        new URLSearchParams({
-          grant_type: 'refresh_token',
-          refresh_token: integration.refresh_token,
-        }),
-        {
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            Authorization: `Basic ${Buffer.from(
-              `${process.env.SPOTIFY_CLIENT_ID}:${process.env.SPOTIFY_CLIENT_SECRET}`
-            ).toString('base64')}`,
-          },
-        }
-      );
-
-      const tokenData: SpotifyTokenResponse = response.data;
-      const tokenExpiresAt = new Date(Date.now() + tokenData.expires_in * 1000);
-
-      return await updateMusicIntegrationTokens(userId, 'spotify', {
-        access_token: tokenData.access_token,
-        refresh_token: tokenData.refresh_token || integration.refresh_token,
-        token_expires_at: tokenExpiresAt,
-        has_valid_token: true,
-        is_connected: true,
-        last_sync_at: new Date(),
-      });
-    } catch (error) {
-      console.error('Error refreshing Spotify token:', error);
-
-      // Mark token as invalid and disconnect integration
-      await updateMusicIntegrationTokens(userId, 'spotify', {
-        has_valid_token: false,
-        is_connected: false,
-      });
-
-      throw new Error('Failed to refresh Spotify token');
-    }
-  }
-
   private async getSpotifyTokens(authCode: string): Promise<SpotifyTokenResponse> {
     const response = await axios.post(
       'https://accounts.spotify.com/api/token',

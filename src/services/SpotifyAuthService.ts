@@ -298,4 +298,65 @@ export class SpotifyAuthService {
       throw new Error('Failed to fetch track from Spotify');
     }
   }
+
+  async getPlaylistTracks(
+    playlistId: string,
+    accessToken: string,
+    limit: number = 100,
+    offset: number = 0
+  ): Promise<{ items: Array<{ track: SpotifyTrack | null; added_at?: string }>; total: number; next: string | null }> {
+    try {
+      const response = await axios.get(`${this.apiUrl}/playlists/${playlistId}/tracks`, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        params: {
+          limit: Math.min(limit, 100), // Spotify API limit is 100
+          offset,
+          market: 'US', // Add market for better results
+        },
+      });
+
+      return {
+        items: response.data.items,
+        total: response.data.total,
+        next: response.data.next,
+      };
+    } catch (error: any) {
+      if (error.response?.status === 404) {
+        throw new Error(`Playlist not found: ${playlistId}`);
+      }
+      if (error.response?.status === 401) {
+        throw new Error('Spotify token expired');
+      }
+      console.error('Error fetching playlist tracks from Spotify:', error.response?.data || error.message);
+      throw new Error('Failed to fetch playlist tracks from Spotify');
+    }
+  }
+
+  async getAllPlaylistTracks(playlistId: string, accessToken: string): Promise<SpotifyTrack[]> {
+    const allTracks: SpotifyTrack[] = [];
+    let offset = 0;
+    const limit = 100;
+    let hasMore = true;
+
+    while (hasMore) {
+      const response = await this.getPlaylistTracks(playlistId, accessToken, limit, offset);
+      
+      // Filter out null tracks (Spotify can have null tracks in playlists)
+      const validTracks = response.items
+        .map((item) => item.track)
+        .filter((track): track is SpotifyTrack => track !== null);
+      
+      allTracks.push(...validTracks);
+
+      if (response.next) {
+        offset += limit;
+      } else {
+        hasMore = false;
+      }
+    }
+
+    return allTracks;
+  }
 }

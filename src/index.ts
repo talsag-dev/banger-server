@@ -21,6 +21,7 @@ import { usersRouter } from './routes/users';
 import { errorHandler } from './middleware/errorHandler';
 import { initializeDatabase } from './database/init';
 import { config, allowedOrigins } from './config';
+import { tokenRefreshService } from './services/TokenRefreshService';
 
 console.log('🔍 Environment variables check:');
 console.log(`   NODE_ENV: ${config.nodeEnv}`);
@@ -138,7 +139,6 @@ const startServer = async () => {
         console.log(`✅ HTTPS enabled for all environments`);
 
         // Start token refresh service
-        const { tokenRefreshService } = require('./services/TokenRefreshService');
         tokenRefreshService.start();
       });
     } catch (certError) {

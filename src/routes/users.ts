@@ -10,6 +10,9 @@ router.get('/:userId/profile', auth, usersController.getProfile as any);
 // Get user playlists from all connected music services
 router.get('/:userId/playlists', auth, usersController.getPlaylists as any);
 
+// Get tracks for a specific playlist
+router.get('/:userId/playlists/:playlistId/tracks', auth, usersController.getPlaylistTracks as any);
+
 // Follow user
 router.post('/:userId/follow', auth, usersController.follow as any);
 

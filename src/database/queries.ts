@@ -187,7 +187,7 @@ export const getUserMusicIntegrations = async (userId: string): Promise<MusicInt
 
 export const getAllUsersWithSpotifyIntegrations = async (): Promise<string[]> => {
   const { rows } = await pool.query(
-    'SELECT DISTINCT user_id FROM music_integrations WHERE provider = $1 AND refresh_token IS NOT NULL AND is_connected = TRUE',
+    'SELECT DISTINCT user_id FROM music_integrations WHERE provider = $1 AND refresh_token IS NOT NULL',
     ['spotify']
   );
   return rows.map((row) => row.user_id);
@@ -551,6 +551,28 @@ export const findPlaylistById = async (id: string): Promise<Playlist | null> => 
   return rows[0] as Playlist;
 };
 
+export const findPlaylistByExternalId = async (
+  externalId: string,
+  userId: string,
+  provider?: string
+): Promise<Playlist | null> => {
+  if (provider) {
+    const { rows } = await pool.query(
+      'SELECT * FROM playlists WHERE external_id = $1 AND user_id = $2 AND provider = $3',
+      [externalId, userId, provider]
+    );
+    if (rows.length === 0) return null;
+    return rows[0] as Playlist;
+  } else {
+    const { rows } = await pool.query(
+      'SELECT * FROM playlists WHERE external_id = $1 AND user_id = $2',
+      [externalId, userId]
+    );
+    if (rows.length === 0) return null;
+    return rows[0] as Playlist;
+  }
+};
+
 export const getUserPlaylists = async (userId: string, provider?: string): Promise<Playlist[]> => {
   if (provider) {
     const { rows } = await pool.query(
@@ -640,14 +662,25 @@ export const syncPlaylistTracks = async (
     );
 
     // Insert/update new tracks
+    // Since we soft-deleted all tracks first, we can just insert new ones
+    // If a track exists at the same position (with removed_at set), we update it
     for (const { track_id, position } of trackIds) {
-      await client.query(
-        `INSERT INTO playlist_tracks (playlist_id, track_id, position, added_at, removed_at)
-         VALUES ($1, $2, $3, CURRENT_TIMESTAMP, NULL)
-         ON CONFLICT (playlist_id, track_id, position) 
-         DO UPDATE SET removed_at = NULL, added_at = CURRENT_TIMESTAMP`,
+      // First try to update existing removed track
+      const updateResult = await client.query(
+        `UPDATE playlist_tracks 
+         SET removed_at = NULL, added_at = CURRENT_TIMESTAMP
+         WHERE playlist_id = $1 AND track_id = $2 AND position = $3 AND removed_at IS NOT NULL`,
         [playlistId, track_id, position]
       );
+
+      // If no row was updated, insert new one
+      if (updateResult.rowCount === 0) {
+        await client.query(
+          `INSERT INTO playlist_tracks (playlist_id, track_id, position, added_at, removed_at)
+           VALUES ($1, $2, $3, CURRENT_TIMESTAMP, NULL)`,
+          [playlistId, track_id, position]
+        );
+      }
     }
 
     await client.query('COMMIT');
@@ -665,6 +698,32 @@ export const getPlaylistTracks = async (playlistId: string): Promise<PlaylistTra
     [playlistId]
   );
   return rows as PlaylistTrack[];
+};
+
+// Get playlist tracks with full track data
+export const getPlaylistTracksWithDetails = async (
+  playlistId: string
+): Promise<Array<Track & { position: number }>> => {
+  const { rows } = await pool.query(
+    `SELECT 
+      t.*,
+      pt.position
+    FROM playlist_tracks pt
+    JOIN tracks t ON pt.track_id = t.id
+    WHERE pt.playlist_id = $1 AND pt.removed_at IS NULL
+    ORDER BY pt.position`,
+    [playlistId]
+  );
+
+  return rows.map((row) => {
+    const track = { ...row };
+    delete track.position; // position is on the outer object
+    return {
+      ...track,
+      position: row.position,
+      metadata: parseMetadata(track.metadata),
+    } as Track & { position: number };
+  });
 };
 
 // Post queries
