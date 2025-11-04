@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { authService } from '../services/AuthService';
 import { musicIntegrationService } from '../services/MusicIntegrationService';
+import { pkceService } from '../services/PkceService';
 import { findUserById, getUserMusicIntegrations } from '../database/queries';
 
 export const authController = {
@@ -9,12 +10,10 @@ export const authController = {
     try {
       const { email, password, displayName, username } = req.body;
       if (!email || !password || !displayName || !username) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            error: 'Email, password, display name, and username are required',
-          });
+        return res.status(400).json({
+          success: false,
+          error: 'Email, password, display name, and username are required',
+        });
       }
       const { user, token } = await authService.signUpWithEmail(
         email,
@@ -188,6 +187,21 @@ export const authController = {
     return res.status(200).json({ success: true, data: { authUrl } });
   },
 
+  integrationsSoundCloudAuthUrl: (req: Request, res: Response) => {
+    const baseUrl = musicIntegrationService.getSoundCloudAuthUrl();
+    const state = pkceService.generateState();
+    const verifier = pkceService.generateCodeVerifier();
+    const challenge = pkceService.createChallenge(verifier);
+    pkceService.saveVerifier(state, verifier);
+
+    const url = new URL(baseUrl);
+    url.searchParams.set('code_challenge', challenge);
+    url.searchParams.set('code_challenge_method', 'S256');
+    url.searchParams.set('state', state);
+
+    return res.status(200).json({ success: true, data: { authUrl: url.toString(), state } });
+  },
+
   integrationsSpotifyConnect: async (req: any, res: Response) => {
     try {
       const { code } = req.body;
@@ -210,6 +224,58 @@ export const authController = {
       return res
         .status(400)
         .json({ success: false, error: error?.message || 'Failed to connect Spotify' });
+    }
+  },
+
+  integrationsSoundCloudConnect: async (req: any, res: Response) => {
+    try {
+      let incoming = req.body;
+      if (typeof incoming === 'string') {
+        try {
+          incoming = JSON.parse(incoming);
+        } catch {}
+      }
+      // Some clients double-stringify
+      if (typeof incoming?.body === 'string') {
+        try {
+          incoming = JSON.parse(incoming.body);
+        } catch {}
+      }
+
+      const { code, state } = incoming || {};
+      if (!code || !state) {
+        return res
+          .status(400)
+          .json({ success: false, error: 'Authorization code and state are required' });
+      }
+
+      const codeVerifier = pkceService.consumeVerifier(state);
+      if (!codeVerifier) {
+        return res
+          .status(400)
+          .json({ success: false, error: 'Invalid or expired state for SoundCloud PKCE' });
+      }
+
+      const integration = await musicIntegrationService.connectSoundCloud(req.user!.userId, {
+        code,
+        codeVerifier,
+      });
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          integration: {
+            provider: integration.provider,
+            isConnected: integration.is_connected,
+            displayName: integration.display_name,
+            connectedAt: integration.connected_at,
+          },
+        },
+      });
+    } catch (error: any) {
+      return res
+        .status(400)
+        .json({ success: false, error: error?.message || 'Failed to connect SoundCloud' });
     }
   },
 

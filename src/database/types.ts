@@ -1,12 +1,8 @@
 // Database types
 export interface User {
   id: string; // UUID
-  // Legacy Spotify fields (for backward compatibility)
-  spotify_id?: string;
-  spotify_access_token?: string;
-  spotify_refresh_token?: string;
 
-  // New auth system fields
+  // Auth system fields
   auth_provider: 'google' | 'apple' | 'email' | 'spotify';
   google_id?: string;
   apple_id?: string;
@@ -151,7 +147,6 @@ export interface CreateUserData {
   auth_provider: 'google' | 'apple' | 'email' | 'spotify';
   google_id?: string;
   apple_id?: string;
-  spotify_id?: string; // for backward compatibility
   email?: string;
   password_hash?: string; // for email auth
   username?: string;

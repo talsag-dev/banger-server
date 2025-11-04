@@ -16,6 +16,7 @@ import rateLimit from 'express-rate-limit';
 import cookieParser from 'cookie-parser';
 import { authRouter } from './routes/auth';
 import { spotifyRouter } from './routes/spotify';
+import { soundcloudRouter } from './routes/soundcloud';
 import { postsRouter } from './routes/posts';
 import { usersRouter } from './routes/users';
 import { errorHandler } from './middleware/errorHandler';
@@ -86,14 +87,15 @@ app.use(
 // });
 // app.use(limiter);
 
-// Body parsing middleware
-app.use(express.json({ limit: '10mb' }));
+// Body parsing middleware (allow JSON primitives for clients that send stringified JSON)
+app.use(express.json({ limit: '10mb', strict: false }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
 // Routes
 app.use('/api/auth', authRouter);
 app.use('/api/spotify', spotifyRouter);
+app.use('/api/soundcloud', soundcloudRouter);
 app.use('/api/posts', postsRouter);
 app.use('/api/users', usersRouter);
 

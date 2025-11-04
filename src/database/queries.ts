@@ -20,14 +20,13 @@ import type {
 // User queries
 export const createUser = async (userData: CreateUserData): Promise<User> => {
   const { rows } = await pool.query(
-    `INSERT INTO users (auth_provider, google_id, apple_id, spotify_id, email, password_hash, username, display_name, avatar_url, bio, email_verified) 
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) 
+    `INSERT INTO users (auth_provider, google_id, apple_id, email, password_hash, username, display_name, avatar_url, bio, email_verified) 
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) 
      RETURNING *`,
     [
       userData.auth_provider,
       userData.google_id,
       userData.apple_id,
-      userData.spotify_id,
       userData.email,
       userData.password_hash,
       userData.username,
@@ -52,11 +51,6 @@ export const findUserByGoogleId = async (googleId: string): Promise<User | null>
 
 export const findUserByAppleId = async (appleId: string): Promise<User | null> => {
   const { rows } = await pool.query('SELECT * FROM users WHERE apple_id = $1', [appleId]);
-  return rows[0] || null;
-};
-
-export const findUserBySpotifyId = async (spotifyId: string): Promise<User | null> => {
-  const { rows } = await pool.query('SELECT * FROM users WHERE spotify_id = $1', [spotifyId]);
   return rows[0] || null;
 };
 
@@ -193,6 +187,14 @@ export const getAllUsersWithSpotifyIntegrations = async (): Promise<string[]> =>
   return rows.map((row) => row.user_id);
 };
 
+export const getAllUsersWithSoundCloudIntegrations = async (): Promise<string[]> => {
+  const { rows } = await pool.query(
+    'SELECT DISTINCT user_id FROM music_integrations WHERE provider = $1 AND refresh_token IS NOT NULL',
+    ['soundcloud']
+  );
+  return rows.map((row) => row.user_id);
+};
+
 export const updateMusicIntegrationTokens = async (
   userId: string,
   provider: string,
@@ -294,92 +296,6 @@ export const deleteMusicIntegration = async (userId: string, provider: string): 
     userId,
     provider,
   ]);
-};
-
-// Legacy Spotify support (for backward compatibility)
-export const upsertUser = async (userData: {
-  spotify_id: string;
-  email?: string;
-  display_name?: string;
-  avatar_url?: string;
-  bio?: string;
-  spotify_access_token?: string;
-  spotify_refresh_token?: string;
-}): Promise<User> => {
-  const { rows } = await pool.query(
-    `INSERT INTO users (auth_provider, spotify_id, email, display_name, avatar_url, bio) 
-     VALUES ('spotify', $1, $2, $3, $4, $5)
-     ON CONFLICT (spotify_id) 
-     DO UPDATE SET 
-       email = COALESCE(EXCLUDED.email, users.email),
-       display_name = COALESCE(EXCLUDED.display_name, users.display_name),
-       avatar_url = COALESCE(EXCLUDED.avatar_url, users.avatar_url),
-       bio = COALESCE(EXCLUDED.bio, users.bio),
-       updated_at = CURRENT_TIMESTAMP
-     RETURNING *`,
-    [userData.spotify_id, userData.email, userData.display_name, userData.avatar_url, userData.bio]
-  );
-
-  const user = rows[0];
-
-  // Also create/update the Spotify music integration
-  if (userData.spotify_access_token) {
-    await pool.query(
-      `INSERT INTO music_integrations (user_id, provider, provider_user_id, display_name, avatar_url, access_token, refresh_token)
-       VALUES ($1, 'spotify', $2, $3, $4, $5, $6)
-       ON CONFLICT (user_id, provider)
-       DO UPDATE SET
-         display_name = COALESCE(EXCLUDED.display_name, music_integrations.display_name),
-         avatar_url = COALESCE(EXCLUDED.avatar_url, music_integrations.avatar_url),
-         access_token = COALESCE(EXCLUDED.access_token, music_integrations.access_token),
-         refresh_token = COALESCE(EXCLUDED.refresh_token, music_integrations.refresh_token),
-         has_valid_token = TRUE,
-         updated_at = CURRENT_TIMESTAMP`,
-      [
-        user.id,
-        userData.spotify_id,
-        userData.display_name,
-        userData.avatar_url,
-        userData.spotify_access_token,
-        userData.spotify_refresh_token,
-      ]
-    );
-  }
-
-  return user;
-};
-
-export const updateUserTokens = async (
-  spotifyId: string,
-  accessToken: string,
-  refreshToken: string
-): Promise<User | null> => {
-  // Update tokens in music_integrations table instead
-  const user = await findUserBySpotifyId(spotifyId);
-  if (!user) return null;
-
-  await updateMusicIntegration(user.id, 'spotify', {
-    access_token: accessToken,
-    refresh_token: refreshToken,
-    has_valid_token: true,
-    last_sync_at: new Date(),
-  });
-
-  return user;
-};
-
-export const getUserSpotifyTokens = async (
-  userId: string
-): Promise<{ spotify_access_token: string; spotify_refresh_token: string } | null> => {
-  const integration = await findMusicIntegration(userId, 'spotify');
-  if (!integration?.access_token || !integration?.refresh_token) {
-    return null;
-  }
-
-  return {
-    spotify_access_token: integration.access_token,
-    spotify_refresh_token: integration.refresh_token,
-  };
 };
 
 // Helper function to safely parse metadata (handles both string and object)

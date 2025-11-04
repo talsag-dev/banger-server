@@ -1,6 +1,7 @@
 import {
   getUserMusicIntegrations,
   getAllUsersWithSpotifyIntegrations,
+  getAllUsersWithSoundCloudIntegrations,
   updateMusicIntegrationTokens,
 } from '../database/queries';
 import axios from 'axios';
@@ -53,12 +54,17 @@ export class TokenRefreshService {
         console.log('🔄 Token refresh cycle started');
       }
 
-      // Get all users with Spotify integrations
-      const userIds = await getAllUsersWithSpotifyIntegrations();
-      console.log('userIds', userIds);
-      if (userIds.length === 0) {
+      // Get all users with Spotify and SoundCloud integrations
+      const [spotifyUserIds, soundcloudUserIds] = await Promise.all([
+        getAllUsersWithSpotifyIntegrations(),
+        getAllUsersWithSoundCloudIntegrations(),
+      ]);
+
+      const totalUsers = spotifyUserIds.length + soundcloudUserIds.length;
+
+      if (totalUsers === 0) {
         if (config.debug) {
-          console.log('   No users with Spotify integrations to refresh');
+          console.log('   No users with integrations to refresh');
         }
         return;
       }
@@ -67,15 +73,31 @@ export class TokenRefreshService {
       let skipped = 0;
       let failed = 0;
 
-      // Process in parallel with concurrency limit (max 10 at a time)
+      // Process Spotify and SoundCloud in parallel with concurrency limit (max 10 at a time)
       const batchSize = 10;
-      for (let i = 0; i < userIds.length; i += batchSize) {
-        const batch = userIds.slice(i, i + batchSize);
+
+      // Process Spotify integrations
+      for (let i = 0; i < spotifyUserIds.length; i += batchSize) {
+        const batch = spotifyUserIds.slice(i, i + batchSize);
         await Promise.all(
           batch.map(async (userId) => {
             const result = await this.refreshSpotifyTokenForUser(userId);
             if (result === true) refreshed++;
             else if (result === false) skipped++;
+            else failed++;
+          })
+        );
+      }
+
+      // Process SoundCloud integrations
+      for (let i = 0; i < soundcloudUserIds.length; i += batchSize) {
+        const batch = soundcloudUserIds.slice(i, i + batchSize);
+        await Promise.all(
+          batch.map(async (userId) => {
+            const result = await this.refreshSoundCloudTokenForUser(userId);
+            if (result === true) refreshed++;
+            else if (result === false) skipped++;
+            else failed++;
           })
         );
       }
@@ -97,7 +119,7 @@ export class TokenRefreshService {
     try {
       const integrations = await getUserMusicIntegrations(userId);
       const spotifyIntegration = integrations.find((i) => i.provider === 'spotify');
-      console.log('spotifyIntegration', integrations);
+
       if (!spotifyIntegration || !spotifyIntegration.refresh_token) {
         return false; // No Spotify integration or no refresh token
       }
@@ -178,17 +200,120 @@ export class TokenRefreshService {
   }
 
   /**
+   * Refresh token for a specific user's SoundCloud integration
+   */
+  async refreshSoundCloudTokenForUser(userId: string): Promise<boolean> {
+    try {
+      const integrations = await getUserMusicIntegrations(userId);
+      const soundcloudIntegration = integrations.find((i) => i.provider === 'soundcloud');
+
+      if (!soundcloudIntegration || !soundcloudIntegration.refresh_token) {
+        return false; // No SoundCloud integration or no refresh token
+      }
+
+      if (!soundcloudIntegration.token_expires_at) {
+        return false; // No expiry date
+      }
+
+      const expiresAt = new Date(soundcloudIntegration.token_expires_at);
+      const now = new Date();
+      const timeUntilExpiry = expiresAt.getTime() - now.getTime();
+      const thirtyMinutes = 30 * 60 * 1000; // 30 minutes in ms
+
+      if (timeUntilExpiry <= thirtyMinutes) {
+        try {
+          const response = await axios.post(
+            'https://secure.soundcloud.com/oauth/token',
+            new URLSearchParams({
+              grant_type: 'refresh_token',
+              refresh_token: soundcloudIntegration.refresh_token,
+              client_id: process.env.SOUNDCLOUD_CLIENT_ID || '',
+              client_secret: process.env.SOUNDCLOUD_CLIENT_SECRET || '',
+            }),
+            {
+              headers: {
+                accept: 'application/json; charset=utf-8',
+                'Content-Type': 'application/x-www-form-urlencoded',
+              },
+            }
+          );
+
+          const tokenData = response.data as {
+            access_token: string;
+            refresh_token?: string;
+            expires_in: number;
+          };
+
+          const tokenExpiresAt = new Date(Date.now() + tokenData.expires_in * 1000);
+
+          await updateMusicIntegrationTokens(userId, 'soundcloud', {
+            access_token: tokenData.access_token,
+            refresh_token: tokenData.refresh_token || soundcloudIntegration.refresh_token,
+            token_expires_at: tokenExpiresAt,
+            has_valid_token: true,
+            is_connected: true,
+            last_sync_at: new Date(),
+          });
+
+          if (config.debug) {
+            console.log(`✅ Refreshed SoundCloud token for user ${userId}`);
+          }
+          return true;
+        } catch (error) {
+          console.error(`❌ Failed to refresh SoundCloud token for user ${userId}:`, error);
+
+          // Mark token as invalid and disconnected on failure
+          try {
+            await updateMusicIntegrationTokens(userId, 'soundcloud', {
+              has_valid_token: false,
+              is_connected: false,
+            });
+          } catch (updateError) {
+            console.error(
+              'Failed to update integration status after refresh failure:',
+              updateError
+            );
+          }
+
+          return false;
+        }
+      }
+
+      return false; // Token still valid, no refresh needed
+    } catch (error) {
+      console.error(`Error refreshing SoundCloud token for user ${userId}:`, error);
+      return false;
+    }
+  }
+
+  /**
    * Refresh tokens for all users (batch operation)
    * Call this periodically or from a cron job
    */
   async refreshAllTokens(): Promise<{ refreshed: number; failed: number }> {
-    const userIds = await getAllUsersWithSpotifyIntegrations();
+    const [spotifyUserIds, soundcloudUserIds] = await Promise.all([
+      getAllUsersWithSpotifyIntegrations(),
+      getAllUsersWithSoundCloudIntegrations(),
+    ]);
+
     let refreshed = 0;
     let failed = 0;
 
-    for (const userId of userIds) {
+    // Refresh Spotify tokens
+    for (const userId of spotifyUserIds) {
       try {
         const result = await this.refreshSpotifyTokenForUser(userId);
+        if (result) refreshed++;
+        else failed++;
+      } catch {
+        failed++;
+      }
+    }
+
+    // Refresh SoundCloud tokens
+    for (const userId of soundcloudUserIds) {
+      try {
+        const result = await this.refreshSoundCloudTokenForUser(userId);
         if (result) refreshed++;
         else failed++;
       } catch {

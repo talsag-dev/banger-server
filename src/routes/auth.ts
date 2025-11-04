@@ -27,10 +27,22 @@ router.post('/reset-password', authController.resetPassword as any);
 // Music Integration Routes
 router.get('/integrations/spotify', authController.integrationsSpotifyAuthUrl as any);
 
+// SoundCloud: return auth URL (frontend will redirect)
+router.get(
+  '/integrations/soundcloud/connect',
+  authController.integrationsSoundCloudAuthUrl as any
+);
+
 router.post(
   '/integrations/spotify/connect',
   auth,
   authController.integrationsSpotifyConnect as any
+);
+
+router.post(
+  '/integrations/soundcloud/connect',
+  auth,
+  authController.integrationsSoundCloudConnect as any
 );
 
 router.post(

@@ -1,10 +1,6 @@
 -- Create users table with multi-provider authentication support
 CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
-    -- Legacy Spotify support
-    spotify_id VARCHAR(255) UNIQUE,
-    spotify_access_token TEXT,
-    spotify_refresh_token TEXT,
     -- Multi-provider authentication
     auth_provider VARCHAR(50),
     -- 'google', 'apple', 'email', 'spotify'
