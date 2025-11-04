@@ -20,7 +20,11 @@ import {
   findTrackByProviderId,
 } from '../database/queries';
 import { musicIntegrationService } from '../services/MusicIntegrationService';
-import { normalizeSpotifyPlaylist, normalizeSpotifyTrack } from '../database/normalize';
+import {
+  normalizeSpotifyTrack,
+  normalizePlaylistFromProvider,
+  normalizeTrackFromProvider,
+} from '../database/normalize';
 import { SpotifyAuthService } from '../services/SpotifyAuthService';
 import axios from 'axios';
 
@@ -33,6 +37,67 @@ interface Playlist {
   provider: 'spotify' | 'apple-music' | 'youtube-music' | 'soundcloud';
   trackCount: number;
   externalUrl?: string;
+}
+
+// Helper function to sync playlists from all connected providers
+async function syncUserPlaylists(
+  userId: string,
+  integrations: Awaited<ReturnType<typeof musicIntegrationService.getUserIntegrations>>
+): Promise<void> {
+  // Sync Spotify playlists
+  const spotifyIntegration = integrations.find((i) => i.provider === 'spotify');
+  if (
+    spotifyIntegration?.is_connected &&
+    spotifyIntegration.access_token &&
+    spotifyIntegration.has_valid_token
+  ) {
+    try {
+      const spotifyResponse = await axios.get('https://api.spotify.com/v1/me/playlists', {
+        headers: { Authorization: `Bearer ${spotifyIntegration.access_token}` },
+        params: { limit: 50 },
+      });
+
+      const playlists = spotifyResponse.data.items || [];
+      for (const spotifyPlaylist of playlists) {
+        const normalizedPlaylist = normalizePlaylistFromProvider(
+          'spotify',
+          spotifyPlaylist,
+          userId
+        );
+        await createOrUpdatePlaylist(normalizedPlaylist);
+      }
+    } catch (error: any) {
+      console.error('Error syncing Spotify playlists:', error);
+    }
+  }
+
+  // Sync SoundCloud playlists
+  const soundcloudIntegration = integrations.find((i) => i.provider === 'soundcloud');
+  if (
+    soundcloudIntegration?.is_connected &&
+    soundcloudIntegration.access_token &&
+    soundcloudIntegration.has_valid_token
+  ) {
+    try {
+      const soundcloudResponse = await axios.get('https://api.soundcloud.com/me/playlists', {
+        headers: { Authorization: `Bearer ${soundcloudIntegration.access_token}` },
+        params: { limit: 50, linked_partitioning: 1 },
+      });
+
+      // Handle SoundCloud pagination format
+      const playlists = soundcloudResponse.data.collection || soundcloudResponse.data || [];
+      for (const scPlaylist of playlists) {
+        console.log('scPlaylist', scPlaylist);
+        const normalizedPlaylist = normalizePlaylistFromProvider('soundcloud', scPlaylist, userId);
+        await createOrUpdatePlaylist(normalizedPlaylist);
+      }
+    } catch (error: any) {
+      console.error('Error syncing SoundCloud playlists:', error);
+    }
+  }
+
+  // TODO: Sync Apple Music playlists when integration is available
+  // TODO: Sync YouTube Music playlists when integration is available
 }
 
 export const usersController = {
@@ -93,6 +158,22 @@ export const usersController = {
         },
       ];
 
+      // Sync and get playlists from all connected providers
+      await syncUserPlaylists(userId, integrations);
+
+      // Get playlists from database
+      const playlists = await getUserPlaylists(userId);
+      const frontendPlaylists: Playlist[] = playlists.map((p) => ({
+        id: p.external_id,
+        name: p.name,
+        description: p.description,
+        image: p.image_url,
+        owner: p.owner || 'Unknown',
+        provider: p.provider,
+        trackCount: p.track_count,
+        externalUrl: p.external_url,
+      }));
+
       const profile = {
         success: true,
         data: {
@@ -120,6 +201,7 @@ export const usersController = {
             integrations.find((i) => i.provider === 'apple-music')?.is_connected || false,
           joinedDate: user.created_at.toISOString().split('T')[0],
           connectedPlatforms,
+          playlists: frontendPlaylists,
           settings: {
             notifications: {
               email: true,
@@ -145,41 +227,9 @@ export const usersController = {
         return res.status(400).json({ success: false, error: 'Invalid user ID format' });
       }
 
-      // Check database first for cached playlists
-      const cachedPlaylists = await getUserPlaylists(userId);
-
-      // Check if we need to sync (for now, always sync - TODO: implement smart sync logic)
-      const shouldSync = true; // TODO: Check last_synced_at and determine if sync needed
-
-      if (shouldSync) {
-        // Fetch Spotify playlists from API and normalize/store them
-        const spotifyIntegration = await findMusicIntegration(userId, 'spotify');
-        if (
-          spotifyIntegration?.is_connected &&
-          spotifyIntegration.access_token &&
-          spotifyIntegration.has_valid_token
-        ) {
-          try {
-            const spotifyResponse = await axios.get('https://api.spotify.com/v1/me/playlists', {
-              headers: { Authorization: `Bearer ${spotifyIntegration.access_token}` },
-              params: { limit: 50 },
-            });
-
-            // Normalize and upsert each playlist to database
-            for (const spotifyPlaylist of spotifyResponse.data.items || []) {
-              const normalizedPlaylist = normalizeSpotifyPlaylist(spotifyPlaylist, userId);
-              await createOrUpdatePlaylist(normalizedPlaylist);
-            }
-          } catch (error: any) {
-            console.error('Error syncing Spotify playlists:', error);
-            // Continue with cached data if API fails
-          }
-        }
-
-        // TODO: Fetch Apple Music playlists when integration is available
-        // TODO: Fetch YouTube Music playlists when integration is available
-        // TODO: Fetch SoundCloud playlists when integration is available
-      }
+      // Get integrations and sync playlists from all connected providers
+      const integrations = await musicIntegrationService.getUserIntegrations(userId);
+      await syncUserPlaylists(userId, integrations);
 
       // Return playlists from database (now synced)
       const playlists = await getUserPlaylists(userId);
@@ -228,62 +278,147 @@ export const usersController = {
 
       // If no cached tracks or we want fresh data, fetch from Spotify API
       let shouldSync = cachedTracks.length === 0;
-      
+
       // Optional: Check if sync is needed based on last_synced_at (for future optimization)
       // For now, we'll sync if no tracks exist
 
-      if (shouldSync && playlist.provider === 'spotify') {
-        const spotifyIntegration = await findMusicIntegration(userId, 'spotify');
-        if (
-          spotifyIntegration?.is_connected &&
-          spotifyIntegration.access_token &&
-          spotifyIntegration.has_valid_token
-        ) {
-          try {
-            const spotifyAuthService = new SpotifyAuthService();
-            // Fetch all tracks from Spotify (handles pagination)
-            const spotifyTracks = await spotifyAuthService.getAllPlaylistTracks(
-              playlist.external_id,
-              spotifyIntegration.access_token
-            );
+      if (shouldSync) {
+        if (playlist.provider === 'spotify') {
+          const spotifyIntegration = await findMusicIntegration(userId, 'spotify');
+          if (
+            spotifyIntegration?.is_connected &&
+            spotifyIntegration.access_token &&
+            spotifyIntegration.has_valid_token
+          ) {
+            try {
+              const spotifyAuthService = new SpotifyAuthService();
+              // Fetch all tracks from Spotify (handles pagination)
+              const spotifyTracks = await spotifyAuthService.getAllPlaylistTracks(
+                playlist.external_id,
+                spotifyIntegration.access_token
+              );
 
-            // Normalize and store each track
-            const trackIds: Array<{ track_id: string; position: number }> = [];
-            
-            for (let i = 0; i < spotifyTracks.length; i++) {
-              const spotifyTrack = spotifyTracks[i];
-              
-              // Check if track already exists
-              let track = await findTrackByProviderId('spotify', spotifyTrack.id);
-              
-              if (!track) {
-                // Normalize and create track
-                const normalizedTrackData = normalizeSpotifyTrack(spotifyTrack);
-                track = await createOrUpdateTrack(normalizedTrackData);
+              // Normalize and store each track
+              const trackIds: Array<{ track_id: string; position: number }> = [];
+
+              for (let i = 0; i < spotifyTracks.length; i++) {
+                const spotifyTrack = spotifyTracks[i];
+
+                // Check if track already exists
+                let track = await findTrackByProviderId('spotify', spotifyTrack.id);
+
+                if (!track) {
+                  // Normalize and create track
+                  const normalizedTrackData = normalizeSpotifyTrack(spotifyTrack);
+                  track = await createOrUpdateTrack(normalizedTrackData);
+                }
+
+                trackIds.push({
+                  track_id: track.id,
+                  position: i,
+                });
               }
 
-              trackIds.push({
-                track_id: track.id,
-                position: i,
-              });
+              // Sync tracks to playlist
+              await syncPlaylistTracks(playlist.id, trackIds);
+
+              // Fetch updated tracks with details
+              const updatedTracks = await getPlaylistTracksWithDetails(playlist.id);
+              cachedTracks.length = 0;
+              cachedTracks.push(...updatedTracks);
+            } catch (error: any) {
+              console.error('Error syncing playlist tracks from Spotify:', error);
+              // If we have cached tracks, return them even if sync failed
+              if (cachedTracks.length === 0) {
+                return res.status(500).json({
+                  success: false,
+                  error: 'Failed to fetch playlist tracks',
+                  details: process.env.NODE_ENV === 'development' ? error.message : undefined,
+                });
+              }
             }
+          }
+        } else if (playlist.provider === 'soundcloud') {
+          const soundcloudIntegration = await findMusicIntegration(userId, 'soundcloud');
+          if (
+            soundcloudIntegration?.is_connected &&
+            soundcloudIntegration.access_token &&
+            soundcloudIntegration.has_valid_token
+          ) {
+            try {
+              // Fetch playlist with tracks from SoundCloud API
+              // According to SoundCloud API: GET /playlists/{playlist_id} returns playlist with tracks
+              // Reference: https://developers.soundcloud.com/docs/api/explorer/
+              const soundcloudResponse = await axios.get(
+                `https://api.soundcloud.com/playlists/${playlist.external_id}`,
+                {
+                  headers: {
+                    Authorization: `Bearer ${soundcloudIntegration.access_token}`,
+                    accept: 'application/json; charset=utf-8',
+                  },
+                }
+              );
 
-            // Sync tracks to playlist
-            await syncPlaylistTracks(playlist.id, trackIds);
+              // SoundCloud API returns playlist object
+              // According to API docs: playlist may include tracks array or tracks may be paginated
+              // Reference: https://developers.soundcloud.com/docs/api/explorer/
+              let scTracks = soundcloudResponse.data.tracks || [];
 
-            // Fetch updated tracks with details
-            const updatedTracks = await getPlaylistTracksWithDetails(playlist.id);
-            cachedTracks.length = 0;
-            cachedTracks.push(...updatedTracks);
-          } catch (error: any) {
-            console.error('Error syncing playlist tracks from Spotify:', error);
-            // If we have cached tracks, return them even if sync failed
-            if (cachedTracks.length === 0) {
-              return res.status(500).json({
-                success: false,
-                error: 'Failed to fetch playlist tracks',
-                details: process.env.NODE_ENV === 'development' ? error.message : undefined,
-              });
+              // Handle different response formats from SoundCloud API
+              if (!Array.isArray(scTracks)) {
+                // If tracks is paginated (collection format)
+                if (scTracks.collection && Array.isArray(scTracks.collection)) {
+                  scTracks = scTracks.collection;
+                } else if (scTracks.next_href) {
+                  // If tracks are paginated, we might need to fetch more
+                  // For now, use what we have
+                  scTracks = [];
+                } else {
+                  scTracks = [];
+                }
+              }
+
+              // Ensure we have valid track objects
+              scTracks = scTracks.filter((track: any) => track && track.id && track.title);
+
+              // Normalize and store each track
+              const trackIds: Array<{ track_id: string; position: number }> = [];
+
+              for (let i = 0; i < scTracks.length; i++) {
+                const scTrack = scTracks[i];
+
+                // Check if track already exists
+                let track = await findTrackByProviderId('soundcloud', String(scTrack.id));
+
+                if (!track) {
+                  // Normalize and create track
+                  const normalizedTrackData = normalizeTrackFromProvider('soundcloud', scTrack);
+                  track = await createOrUpdateTrack(normalizedTrackData);
+                }
+
+                trackIds.push({
+                  track_id: track.id,
+                  position: i,
+                });
+              }
+
+              // Sync tracks to playlist
+              await syncPlaylistTracks(playlist.id, trackIds);
+
+              // Fetch updated tracks with details
+              const updatedTracks = await getPlaylistTracksWithDetails(playlist.id);
+              cachedTracks.length = 0;
+              cachedTracks.push(...updatedTracks);
+            } catch (error: any) {
+              console.error('Error syncing playlist tracks from SoundCloud:', error);
+              // If we have cached tracks, return them even if sync failed
+              if (cachedTracks.length === 0) {
+                return res.status(500).json({
+                  success: false,
+                  error: 'Failed to fetch playlist tracks',
+                  details: process.env.NODE_ENV === 'development' ? error.message : undefined,
+                });
+              }
             }
           }
         }

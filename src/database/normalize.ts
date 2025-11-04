@@ -108,16 +108,108 @@ export const normalizeTrackFromProvider = (
       // TODO: Implement YouTube Music normalization
       throw new Error('YouTube Music normalization not yet implemented');
     case 'soundcloud':
-      // TODO: Implement SoundCloud normalization
-      throw new Error('SoundCloud normalization not yet implemented');
+      return normalizeSoundCloudTrack(providerTrackData as SoundCloudTrackData);
     default:
       throw new Error(`Unknown provider: ${provider}`);
   }
 };
 
+// SoundCloud track normalization
+// Based on SoundCloud API: https://developers.soundcloud.com/docs/api/explorer/
+export interface SoundCloudTrackData {
+  id: number;
+  title: string; // Track title
+  user: {
+    username: string;
+    id: number;
+    permalink?: string;
+  };
+  artwork_url?: string | null; // Track artwork
+  duration: number; // Duration in milliseconds
+  permalink_url?: string; // SoundCloud track URL
+  stream_url?: string | null; // Stream URL (requires authentication)
+  created_at?: string; // ISO date string
+  genre?: string | null;
+  description?: string | null;
+  kind?: string; // "track"
+  waveform_url?: string | null;
+  playback_count?: number;
+  favoritings_count?: number;
+}
+
+export const normalizeSoundCloudTrack = (soundcloudTrack: SoundCloudTrackData): CreateTrackData => {
+  // SoundCloud uses 'large' image size by default, but we can request better quality
+  const imageUrl = soundcloudTrack.artwork_url
+    ? soundcloudTrack.artwork_url.replace('large', 't500x500')
+    : undefined;
+
+  // SoundCloud duration is in milliseconds, convert to seconds
+  const durationInSeconds = soundcloudTrack.duration
+    ? Math.floor(soundcloudTrack.duration / 1000)
+    : undefined;
+
+  return {
+    external_id: String(soundcloudTrack.id),
+    provider: 'soundcloud',
+    name: soundcloudTrack.title,
+    artist: soundcloudTrack.user.username,
+    album: undefined, // SoundCloud doesn't have albums
+    duration: durationInSeconds,
+    image_url: imageUrl,
+    preview_url: soundcloudTrack.stream_url || undefined,
+    external_url: soundcloudTrack.permalink_url,
+    metadata: {
+      genre: soundcloudTrack.genre,
+      description: soundcloudTrack.description,
+      created_at: soundcloudTrack.created_at,
+    },
+  };
+};
+
+// SoundCloud playlist normalization
+// Based on SoundCloud API: https://developers.soundcloud.com/docs/api/explorer/
+// Playlists in SoundCloud API are also called "sets"
+export interface SoundCloudPlaylistData {
+  id: number;
+  title: string; // Playlist name
+  description?: string | null;
+  artwork_url?: string | null;
+  user: {
+    username: string;
+    id: number;
+    permalink?: string;
+  };
+  track_count?: number; // Number of tracks in playlist
+  tracks?: any[]; // Tracks array (may be included in playlist response)
+  permalink_url?: string;
+  created_at?: string;
+  kind?: string; // "playlist" or "set"
+}
+
+export const normalizeSoundCloudPlaylist = (
+  soundcloudPlaylist: SoundCloudPlaylistData,
+  userId: string
+): CreatePlaylistData => {
+  // SoundCloud uses 'large' image size by default, but we can request it
+  const imageUrl = soundcloudPlaylist.artwork_url
+    ? soundcloudPlaylist.artwork_url.replace('large', 't500x500')
+    : undefined;
+
+  return {
+    external_id: String(soundcloudPlaylist.id),
+    user_id: userId,
+    provider: 'soundcloud',
+    name: soundcloudPlaylist.title,
+    description: soundcloudPlaylist.description || undefined,
+    image_url: imageUrl,
+    owner: soundcloudPlaylist.user.username,
+    track_count: soundcloudPlaylist.track_count || 0,
+    external_url: soundcloudPlaylist.permalink_url,
+  };
+};
+
 /**
  * Normalize playlist from any provider
- * Placeholder for other providers (Apple Music, YouTube Music, SoundCloud)
  */
 export const normalizePlaylistFromProvider = (
   provider: MusicProvider,
@@ -134,8 +226,7 @@ export const normalizePlaylistFromProvider = (
       // TODO: Implement YouTube Music normalization
       throw new Error('YouTube Music normalization not yet implemented');
     case 'soundcloud':
-      // TODO: Implement SoundCloud normalization
-      throw new Error('SoundCloud normalization not yet implemented');
+      return normalizeSoundCloudPlaylist(providerPlaylistData as SoundCloudPlaylistData, userId);
     default:
       throw new Error(`Unknown provider: ${provider}`);
   }
