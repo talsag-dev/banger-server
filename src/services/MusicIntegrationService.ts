@@ -225,36 +225,30 @@ export class MusicIntegrationService {
 
     // Process integrations and validate tokens
     const integrationPromises = integrations.map(async (integration) => {
+      // Trust database values set by the refresh service
+      // Only override if we can confirm the token is actually expired
       let hasValidToken = integration.has_valid_token;
+      let isConnected = integration.is_connected;
 
-      // Check if token is expired locally
+      // If database says token is valid, trust it (refresh service handles validation)
+      // Only check expiry if database says invalid, or if token is clearly expired
       if (integration.token_expires_at) {
         const isExpired = new Date(integration.token_expires_at) < new Date();
+        // If token is expired, mark as invalid (even if DB says valid - refresh might have failed)
         if (isExpired) {
           hasValidToken = false;
-        }
-      }
-
-      // If we have a Spotify access token, validate it with Spotify API
-      if (integration.access_token && integration.provider === 'spotify' && hasValidToken) {
-        try {
-          const isValid = await this.validateSpotifyToken(integration.access_token);
-          if (!isValid) {
-            hasValidToken = false;
-            // Update database to reflect invalid token
-            await updateMusicIntegrationTokens(userId, 'spotify', {
+          // Update database if it incorrectly says valid
+          if (integration.has_valid_token) {
+            await updateMusicIntegrationTokens(userId, integration.provider, {
               has_valid_token: false,
               is_connected: false,
             });
           }
-        } catch (error) {
-          // If validation fails (network error, etc), use local check result
-          console.error('Error validating Spotify token:', error);
         }
       }
 
-      // Integration is connected only if token is valid and present
-      const isConnected = hasValidToken && !!integration.access_token;
+      // Integration is connected if token is valid and present
+      isConnected = hasValidToken && !!integration.access_token;
 
       return {
         ...integration,

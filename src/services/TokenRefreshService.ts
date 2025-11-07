@@ -7,9 +7,55 @@ import {
 import axios from 'axios';
 import { config } from '../config';
 
+type Provider = 'spotify' | 'soundcloud';
+
+interface TokenRefreshConfig {
+  url: string;
+  getParams: (refreshToken: string) => URLSearchParams;
+  getHeaders: () => Record<string, string>;
+}
+
 export class TokenRefreshService {
   private refreshInterval: NodeJS.Timeout | null = null;
   private readonly REFRESH_INTERVAL_MS = 30 * 60 * 1000; // Run every 30 minutes
+  private readonly REFRESH_THRESHOLD_MS = 45 * 60 * 1000; // 45 minutes
+  private readonly BATCH_SIZE = 10;
+
+  private readonly providerConfigs: Record<Provider, TokenRefreshConfig> = {
+    spotify: {
+      url: 'https://accounts.spotify.com/api/token',
+      getParams: (refreshToken) =>
+        new URLSearchParams({
+          grant_type: 'refresh_token',
+          refresh_token: refreshToken,
+        }),
+      getHeaders: () => ({
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Authorization: `Basic ${Buffer.from(
+          `${process.env.SPOTIFY_CLIENT_ID}:${process.env.SPOTIFY_CLIENT_SECRET}`
+        ).toString('base64')}`,
+      }),
+    },
+    soundcloud: {
+      url: 'https://secure.soundcloud.com/oauth/token',
+      getParams: (refreshToken) =>
+        new URLSearchParams({
+          grant_type: 'refresh_token',
+          refresh_token: refreshToken,
+          client_id: process.env.SOUNDCLOUD_CLIENT_ID || '',
+          client_secret: process.env.SOUNDCLOUD_CLIENT_SECRET || '',
+        }),
+      getHeaders: () => ({
+        accept: 'application/json; charset=utf-8',
+        'Content-Type': 'application/x-www-form-urlencoded',
+      }),
+    },
+  };
+
+  private readonly getUserIdsFunctions: Record<Provider, () => Promise<string[]>> = {
+    spotify: getAllUsersWithSpotifyIntegrations,
+    soundcloud: getAllUsersWithSoundCloudIntegrations,
+  };
 
   /**
    * Start the background token refresh service
@@ -54,58 +100,40 @@ export class TokenRefreshService {
         console.log('🔄 Token refresh cycle started');
       }
 
-      // Get all users with Spotify and SoundCloud integrations
-      const [spotifyUserIds, soundcloudUserIds] = await Promise.all([
-        getAllUsersWithSpotifyIntegrations(),
-        getAllUsersWithSoundCloudIntegrations(),
-      ]);
-
-      const totalUsers = spotifyUserIds.length + soundcloudUserIds.length;
-
-      if (totalUsers === 0) {
-        if (config.debug) {
-          console.log('   No users with integrations to refresh');
-        }
-        return;
-      }
-
+      const providers: Provider[] = ['spotify', 'soundcloud'];
       let refreshed = 0;
       let skipped = 0;
       let failed = 0;
 
-      // Process Spotify and SoundCloud in parallel with concurrency limit (max 10 at a time)
-      const batchSize = 10;
+      // Process all providers
+      for (const provider of providers) {
+        const userIds = await this.getUserIdsFunctions[provider]();
 
-      // Process Spotify integrations
-      for (let i = 0; i < spotifyUserIds.length; i += batchSize) {
-        const batch = spotifyUserIds.slice(i, i + batchSize);
-        await Promise.all(
-          batch.map(async (userId) => {
-            const result = await this.refreshSpotifyTokenForUser(userId);
-            if (result === true) refreshed++;
-            else if (result === false) skipped++;
-            else if (result === null) failed++;
-          })
-        );
-      }
+        if (userIds.length === 0) continue;
 
-      // Process SoundCloud integrations
-      for (let i = 0; i < soundcloudUserIds.length; i += batchSize) {
-        const batch = soundcloudUserIds.slice(i, i + batchSize);
-        await Promise.all(
-          batch.map(async (userId) => {
-            const result = await this.refreshSoundCloudTokenForUser(userId);
-            if (result === true) refreshed++;
-            else if (result === false) skipped++;
-            else if (result === null) failed++;
-          })
-        );
+        // Process in batches
+        for (let i = 0; i < userIds.length; i += this.BATCH_SIZE) {
+          const batch = userIds.slice(i, i + this.BATCH_SIZE);
+          await Promise.all(
+            batch.map(async (userId) => {
+              const result = await this.refreshTokenForUser(userId, provider);
+              if (result === true) refreshed++;
+              else if (result === false) skipped++;
+              else if (result === null) failed++;
+            })
+          );
+        }
       }
 
       if (config.debug) {
-        console.log(
-          `   Token refresh complete: ${refreshed} refreshed, ${skipped} skipped, ${failed} failed`
-        );
+        const total = refreshed + skipped + failed;
+        if (total > 0) {
+          console.log(
+            `   Token refresh complete: ${refreshed} refreshed, ${skipped} skipped, ${failed} failed`
+          );
+        } else {
+          console.log('   No users with integrations to refresh');
+        }
       }
     } catch (error) {
       console.error('Error in token refresh service:', error);
@@ -113,240 +141,147 @@ export class TokenRefreshService {
   }
 
   /**
-   * Refresh token for a specific user's Spotify integration
+   * Refresh token for a specific user's integration
    * Returns: true if refreshed, false if skipped (token still valid), null if failed
    */
-  async refreshSpotifyTokenForUser(userId: string): Promise<boolean | null> {
+  async refreshTokenForUser(userId: string, provider: Provider): Promise<boolean | null> {
     try {
       const integrations = await getUserMusicIntegrations(userId);
-      const spotifyIntegration = integrations.find((i) => i.provider === 'spotify');
+      const integration = integrations.find((i) => i.provider === provider);
 
-      if (!spotifyIntegration || !spotifyIntegration.refresh_token) {
+      if (!integration || !integration.refresh_token) {
         if (config.debug) {
-          console.log(`   ⏭️  Skipped user ${userId}: No Spotify integration or refresh token`);
+          console.log(`   ⏭️  Skipped user ${userId}: No ${provider} integration or refresh token`);
         }
-        return false; // No Spotify integration or no refresh token
+        return false;
       }
 
-      if (!spotifyIntegration.token_expires_at) {
+      const shouldRefresh = this.shouldRefreshToken(integration);
+      if (!shouldRefresh) {
         if (config.debug) {
-          console.log(`   ⏭️  Skipped user ${userId}: No expiry date`);
-        }
-        return false; // No expiry date
-      }
-
-      const expiresAt = new Date(spotifyIntegration.token_expires_at);
-      const now = new Date();
-      const timeUntilExpiry = expiresAt.getTime() - now.getTime();
-      const fortyFiveMinutes = 45 * 60 * 1000; // 45 minutes in ms
-
-      // Refresh if token expires within 45 minutes OR is already expired
-      // Spotify tokens expire after 1 hour. With 30-minute refresh intervals, this ensures
-      // tokens are always refreshed before expiry (worst case: token expires in 45 min, refresh
-      // service runs in 30 min, refreshes with 15 min buffer)
-      if (timeUntilExpiry <= fortyFiveMinutes) {
-        if (config.debug) {
+          const expiresAt = integration.token_expires_at
+            ? new Date(integration.token_expires_at)
+            : null;
+          const timeUntilExpiry = expiresAt ? expiresAt.getTime() - new Date().getTime() : Infinity;
           const minutesUntilExpiry = Math.round(timeUntilExpiry / 60000);
           console.log(
-            `   🔄 Refreshing token for user ${userId} (expires in ${minutesUntilExpiry} minutes)`
+            `   ⏭️  Skipped user ${userId} (${provider}): Token still valid (expires in ${minutesUntilExpiry} minutes)`
           );
         }
-        try {
-          const response = await axios.post(
-            'https://accounts.spotify.com/api/token',
-            new URLSearchParams({
-              grant_type: 'refresh_token',
-              refresh_token: spotifyIntegration.refresh_token,
-            }),
-            {
-              headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                Authorization: `Basic ${Buffer.from(
-                  `${process.env.SPOTIFY_CLIENT_ID}:${process.env.SPOTIFY_CLIENT_SECRET}`
-                ).toString('base64')}`,
-              },
-            }
-          );
-
-          const tokenData = response.data as {
-            access_token: string;
-            refresh_token?: string;
-            expires_in: number;
-          };
-
-          const tokenExpiresAt = new Date(Date.now() + tokenData.expires_in * 1000);
-
-          await updateMusicIntegrationTokens(userId, 'spotify', {
-            access_token: tokenData.access_token,
-            refresh_token: tokenData.refresh_token || spotifyIntegration.refresh_token,
-            token_expires_at: tokenExpiresAt,
-            has_valid_token: true,
-            is_connected: true,
-            last_sync_at: new Date(),
-          });
-
-          if (config.debug) {
-            console.log(`✅ Refreshed Spotify token for user ${userId}`);
-          }
-          return true;
-        } catch (error) {
-          console.error(`❌ Failed to refresh Spotify token for user ${userId}:`, error);
-
-          // Mark token as invalid and disconnected on failure
-          try {
-            await updateMusicIntegrationTokens(userId, 'spotify', {
-              has_valid_token: false,
-              is_connected: false,
-            });
-          } catch (updateError) {
-            console.error(
-              'Failed to update integration status after refresh failure:',
-              updateError
-            );
-          }
-
-          return null; // Failed to refresh
-        }
+        return false;
       }
 
-      if (config.debug) {
+      // At this point we know refresh_token exists (checked above)
+      return await this.performTokenRefresh(userId, provider, {
+        refresh_token: integration.refresh_token,
+        token_expires_at: integration.token_expires_at,
+      });
+    } catch (error) {
+      console.error(`Error refreshing ${provider} token for user ${userId}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Check if token should be refreshed
+   */
+  private shouldRefreshToken(integration: {
+    token_expires_at?: Date | null;
+    has_valid_token?: boolean;
+    is_connected?: boolean;
+  }): boolean {
+    const expiresAt = integration.token_expires_at ? new Date(integration.token_expires_at) : null;
+    const now = new Date();
+    const timeUntilExpiry = expiresAt ? expiresAt.getTime() - now.getTime() : -1;
+
+    return (
+      timeUntilExpiry <= this.REFRESH_THRESHOLD_MS ||
+      !integration.has_valid_token ||
+      !integration.is_connected
+    );
+  }
+
+  /**
+   * Perform the actual token refresh API call
+   */
+  private async performTokenRefresh(
+    userId: string,
+    provider: Provider,
+    integration: { refresh_token: string; token_expires_at?: Date | null }
+  ): Promise<boolean | null> {
+    const providerConfig = this.providerConfigs[provider];
+
+    if (config.debug) {
+      const expiresAt = integration.token_expires_at
+        ? new Date(integration.token_expires_at)
+        : null;
+      if (expiresAt) {
+        const timeUntilExpiry = expiresAt.getTime() - new Date().getTime();
         const minutesUntilExpiry = Math.round(timeUntilExpiry / 60000);
         console.log(
-          `   ⏭️  Skipped user ${userId}: Token still valid (expires in ${minutesUntilExpiry} minutes)`
+          `   🔄 Refreshing ${provider} token for user ${userId} (expires in ${minutesUntilExpiry} minutes)`
+        );
+      } else {
+        console.log(
+          `   🔄 Refreshing ${provider} token for user ${userId} (no expiry date or marked invalid)`
         );
       }
-      return false; // Token still valid, no refresh needed
-    } catch (error) {
-      console.error(`Error refreshing token for user ${userId}:`, error);
-      return null;
     }
-  }
 
-  /**
-   * Refresh token for a specific user's SoundCloud integration
-   * Returns: true if refreshed, false if skipped (token still valid), null if failed
-   */
-  async refreshSoundCloudTokenForUser(userId: string): Promise<boolean | null> {
     try {
-      const integrations = await getUserMusicIntegrations(userId);
-      const soundcloudIntegration = integrations.find((i) => i.provider === 'soundcloud');
+      const response = await axios.post(
+        providerConfig.url,
+        providerConfig.getParams(integration.refresh_token),
+        { headers: providerConfig.getHeaders() }
+      );
 
-      if (!soundcloudIntegration || !soundcloudIntegration.refresh_token) {
-        return false; // No SoundCloud integration or no refresh token
+      const tokenData = response.data as {
+        access_token: string;
+        refresh_token?: string;
+        expires_in: number;
+      };
+
+      const tokenExpiresAt = new Date(Date.now() + tokenData.expires_in * 1000);
+
+      await updateMusicIntegrationTokens(userId, provider, {
+        access_token: tokenData.access_token,
+        refresh_token: tokenData.refresh_token || integration.refresh_token,
+        token_expires_at: tokenExpiresAt,
+        has_valid_token: true,
+        is_connected: true,
+        last_sync_at: new Date(),
+      });
+
+      if (config.debug) {
+        console.log(`✅ Refreshed ${provider} token for user ${userId}`);
       }
-
-      if (!soundcloudIntegration.token_expires_at) {
-        return false; // No expiry date
-      }
-
-      const expiresAt = new Date(soundcloudIntegration.token_expires_at);
-      const now = new Date();
-      const timeUntilExpiry = expiresAt.getTime() - now.getTime();
-      const fortyFiveMinutes = 45 * 60 * 1000; // 45 minutes in ms
-
-      // Refresh if token expires within 45 minutes OR is already expired
-      if (timeUntilExpiry <= fortyFiveMinutes) {
-        try {
-          const response = await axios.post(
-            'https://secure.soundcloud.com/oauth/token',
-            new URLSearchParams({
-              grant_type: 'refresh_token',
-              refresh_token: soundcloudIntegration.refresh_token,
-              client_id: process.env.SOUNDCLOUD_CLIENT_ID || '',
-              client_secret: process.env.SOUNDCLOUD_CLIENT_SECRET || '',
-            }),
-            {
-              headers: {
-                accept: 'application/json; charset=utf-8',
-                'Content-Type': 'application/x-www-form-urlencoded',
-              },
-            }
-          );
-
-          const tokenData = response.data as {
-            access_token: string;
-            refresh_token?: string;
-            expires_in: number;
-          };
-
-          const tokenExpiresAt = new Date(Date.now() + tokenData.expires_in * 1000);
-
-          await updateMusicIntegrationTokens(userId, 'soundcloud', {
-            access_token: tokenData.access_token,
-            refresh_token: tokenData.refresh_token || soundcloudIntegration.refresh_token,
-            token_expires_at: tokenExpiresAt,
-            has_valid_token: true,
-            is_connected: true,
-            last_sync_at: new Date(),
-          });
-
-          if (config.debug) {
-            console.log(`✅ Refreshed SoundCloud token for user ${userId}`);
-          }
-          return true;
-        } catch (error) {
-          console.error(`❌ Failed to refresh SoundCloud token for user ${userId}:`, error);
-
-          // Mark token as invalid and disconnected on failure
-          try {
-            await updateMusicIntegrationTokens(userId, 'soundcloud', {
-              has_valid_token: false,
-              is_connected: false,
-            });
-          } catch (updateError) {
-            console.error(
-              'Failed to update integration status after refresh failure:',
-              updateError
-            );
-          }
-
-          return null; // Failed to refresh
-        }
-      }
-
-      return false; // Token still valid, no refresh needed
+      return true;
     } catch (error) {
-      console.error(`Error refreshing SoundCloud token for user ${userId}:`, error);
+      console.error(`❌ Failed to refresh ${provider} token for user ${userId}:`, error);
+
+      // Mark token as invalid and disconnected on failure
+      try {
+        await updateMusicIntegrationTokens(userId, provider, {
+          has_valid_token: false,
+          is_connected: false,
+        });
+      } catch (updateError) {
+        console.error('Failed to update integration status after refresh failure:', updateError);
+      }
+
       return null;
     }
   }
 
   /**
-   * Refresh tokens for all users (batch operation)
-   * Call this periodically or from a cron job
+   * Public methods for backward compatibility
    */
-  async refreshAllTokens(): Promise<{ refreshed: number; failed: number }> {
-    const [spotifyUserIds, soundcloudUserIds] = await Promise.all([
-      getAllUsersWithSpotifyIntegrations(),
-      getAllUsersWithSoundCloudIntegrations(),
-    ]);
+  async refreshSpotifyTokenForUser(userId: string): Promise<boolean | null> {
+    return this.refreshTokenForUser(userId, 'spotify');
+  }
 
-    let refreshed = 0;
-    let failed = 0;
-
-    // Refresh Spotify tokens
-    for (const userId of spotifyUserIds) {
-      try {
-        const result = await this.refreshSpotifyTokenForUser(userId);
-        if (result) refreshed++;
-        else failed++;
-      } catch {
-        failed++;
-      }
-    }
-
-    // Refresh SoundCloud tokens
-    for (const userId of soundcloudUserIds) {
-      try {
-        const result = await this.refreshSoundCloudTokenForUser(userId);
-        if (result) refreshed++;
-        else failed++;
-      } catch {
-        failed++;
-      }
-    }
-
-    return { refreshed, failed };
+  async refreshSoundCloudTokenForUser(userId: string): Promise<boolean | null> {
+    return this.refreshTokenForUser(userId, 'soundcloud');
   }
 }
 

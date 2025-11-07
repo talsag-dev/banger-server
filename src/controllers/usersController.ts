@@ -199,6 +199,8 @@ export const usersController = {
             integrations.find((i) => i.provider === 'spotify')?.is_connected || false,
           appleConnected:
             integrations.find((i) => i.provider === 'apple-music')?.is_connected || false,
+          soundcloudConnected:
+            integrations.find((i) => i.provider === 'soundcloud')?.is_connected || false,
           joinedDate: user.created_at.toISOString().split('T')[0],
           connectedPlatforms,
           playlists: frontendPlaylists,
