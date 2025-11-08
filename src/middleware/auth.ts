@@ -56,6 +56,30 @@ export const auth = async (req: AuthenticatedRequest, res: Response, next: NextF
       dbUser,
     };
 
+    // Validate integration tokens from JWT
+    const integrations = decoded.integrations || [];
+
+    for (const integration of integrations) {
+      if (!integration.access_token) {
+        continue; // Skip integrations without tokens
+      }
+
+      // Check if token is expired
+      const isExpired =
+        integration.token_expires_at && new Date(integration.token_expires_at) < new Date();
+
+      // If token is expired or invalid, throw auth error
+      if (isExpired || !integration.has_valid_token || !integration.is_connected) {
+        return res.status(401).json({
+          success: false,
+          error: 'Integration token expired',
+          message: `Your ${integration.provider} token has expired. Please reconnect your ${integration.provider} account.`,
+          code: 'TOKEN_EXPIRED',
+          provider: integration.provider,
+        });
+      }
+    }
+
     next();
   } catch (error) {
     console.error('Auth middleware error:', error);

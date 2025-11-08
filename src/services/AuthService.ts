@@ -11,6 +11,7 @@ import {
   setResetToken,
   findUserByResetToken,
   clearResetToken,
+  getUserMusicIntegrations,
 } from '../database/queries';
 import type { User, CreateUserData } from '../database/types';
 
@@ -63,10 +64,10 @@ export class AuthService {
       email_verified: false, // TODO: Implement email verification
     };
 
-    const user = await createUser(userData);
-    const token = this.generateJWT(user);
+      const user = await createUser(userData);
+      const token = await this.generateJWT(user);
 
-    return { user, token };
+      return { user, token };
   }
 
   async loginWithEmail(email: string, password: string): Promise<AuthResult> {
@@ -88,7 +89,7 @@ export class AuthService {
       throw new Error('Invalid email or password');
     }
 
-    const token = this.generateJWT(user);
+    const token = await this.generateJWT(user);
     return { user, token };
   }
 
@@ -128,7 +129,7 @@ export class AuthService {
       user = { ...user, display_name: googleUserInfo.name || user.display_name };
     }
 
-    const token = this.generateJWT(user);
+    const token = await this.generateJWT(user);
     return { user, token };
   }
 
@@ -174,7 +175,7 @@ export class AuthService {
       }
     }
 
-    const token = this.generateJWT(user);
+    const token = await this.generateJWT(user);
     return { user, token };
   }
 
@@ -211,16 +212,31 @@ export class AuthService {
     await updateUserPassword(user.id, passwordHash);
     await clearResetToken(user.id);
 
-    const token = this.generateJWT(user);
+    const token = await this.generateJWT(user);
     return { user, token };
   }
 
   // JWT Token Management
-  generateJWT(user: User): string {
+  async generateJWT(user: User): Promise<string> {
+    // Fetch user integrations to include in token
+    const integrations = await getUserMusicIntegrations(user.id);
+    
+    // Transform integrations for JWT payload (only include necessary fields)
+    const integrationsPayload = integrations.map((integration) => ({
+      provider: integration.provider,
+      access_token: integration.access_token,
+      token_expires_at: integration.token_expires_at
+        ? new Date(integration.token_expires_at).toISOString()
+        : null,
+      has_valid_token: integration.has_valid_token,
+      is_connected: integration.is_connected,
+    }));
+
     const payload = {
       userId: user.id,
       email: user.email,
       authProvider: user.auth_provider,
+      integrations: integrationsPayload,
     };
 
     return jwt.sign(payload, JWT_SECRET, {
@@ -228,13 +244,25 @@ export class AuthService {
     } as jwt.SignOptions);
   }
 
-  verifyJWT(token: string): { userId: string; email?: string; authProvider: string } {
+  verifyJWT(token: string): {
+    userId: string;
+    email?: string;
+    authProvider: string;
+    integrations?: Array<{
+      provider: string;
+      access_token?: string;
+      token_expires_at?: string | null;
+      has_valid_token?: boolean;
+      is_connected?: boolean;
+    }>;
+  } {
     try {
       const decoded = jwt.verify(token, JWT_SECRET) as any;
       return {
         userId: decoded.userId,
         email: decoded.email,
         authProvider: decoded.authProvider,
+        integrations: decoded.integrations || [],
       };
     } catch (error) {
       throw new Error('Invalid or expired token');

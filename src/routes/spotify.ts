@@ -11,22 +11,19 @@ router.get('/auth', auth, spotifyController.startAuth as any);
 // Handle Spotify OAuth callback (complete OAuth flow on backend)
 router.get('/callback', spotifyController.callback as any);
 
-// Get Spotify user profile (requires authentication)
+// Get Spotify user profile (requires authentication - auth middleware validates integration tokens)
 router.get('/profile', auth, spotifyController.profile as any);
 
-// Get current user's Spotify profile
-// Duplicated route removed; single /profile handler above.
-
-// Get user's currently playing track
+// Get user's currently playing track (requires authentication)
 router.get('/currently-playing', auth, spotifyController.currentlyPlaying as any);
 
-// Search Spotify tracks
+// Search Spotify tracks (requires authentication)
 router.get('/search', auth, spotifyController.search as any);
 
-// Get user's top tracks
+// Get user's top tracks (requires authentication)
 router.get('/top-tracks', auth, spotifyController.topTracks as any);
 
-// Get user's playlists (demonstrates using stored tokens)
+// Get user's playlists (requires authentication)
 router.get('/playlists', auth, spotifyController.playlists as any);
 
 export { router as spotifyRouter };
