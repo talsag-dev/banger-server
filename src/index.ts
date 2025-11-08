@@ -7,6 +7,7 @@ console.log(
 );
 
 import express from 'express';
+import http from 'http';
 import https from 'https';
 import fs from 'fs';
 import path from 'path';
@@ -121,33 +122,55 @@ app.use('*', (req, res) => {
 // Error handling middleware
 app.use(errorHandler);
 
-// Create HTTPS server for development
+// Start server (HTTP in production, HTTPS in development)
 const startServer = async () => {
   try {
     // Initialize database first
     await initializeDatabase();
 
-    // Always use HTTPS for all environments
-    try {
-      const certPath = path.join(__dirname, '../certs/localhost-cert.pem');
-      const keyPath = path.join(__dirname, '../certs/localhost-key.pem');
-      const httpsOptions = {
-        key: fs.readFileSync(keyPath),
-        cert: fs.readFileSync(certPath),
-      };
-      https.createServer(httpsOptions, app).listen(PORT, () => {
-        console.log(`🚀 Banger Server running on HTTPS port ${PORT}`);
-        console.log(`🔒 HTTPS URL: https://localhost:${PORT}`);
+    // In production, use HTTP (Render handles HTTPS termination)
+    // In development, use HTTPS if certificates exist
+    if (config.nodeEnv === 'production') {
+      http.createServer(app).listen(PORT, () => {
+        console.log(`🚀 Banger Server running on HTTP port ${PORT}`);
         console.log(`📱 Frontend URL: ${config.frontendUrl}`);
         console.log(`🎵 Spotify OAuth: ${config.spotify.redirectUri}`);
-        console.log(`✅ HTTPS enabled for all environments`);
+        console.log(`✅ Server started (HTTPS handled by Render)`);
 
         // Start token refresh service
         tokenRefreshService.start();
       });
-    } catch (certError) {
-      console.error('❌ SSL certificates not found. HTTPS required.');
-      process.exit(1);
+    } else {
+      // Development: Try HTTPS, fallback to HTTP if certs don't exist
+      const certPath = path.join(__dirname, '../certs/localhost-cert.pem');
+      const keyPath = path.join(__dirname, '../certs/localhost-key.pem');
+
+      if (fs.existsSync(certPath) && fs.existsSync(keyPath)) {
+        const httpsOptions = {
+          key: fs.readFileSync(keyPath),
+          cert: fs.readFileSync(certPath),
+        };
+        https.createServer(httpsOptions, app).listen(PORT, () => {
+          console.log(`🚀 Banger Server running on HTTPS port ${PORT}`);
+          console.log(`🔒 HTTPS URL: https://localhost:${PORT}`);
+          console.log(`📱 Frontend URL: ${config.frontendUrl}`);
+          console.log(`🎵 Spotify OAuth: ${config.spotify.redirectUri}`);
+          console.log(`✅ HTTPS enabled for development`);
+
+          // Start token refresh service
+          tokenRefreshService.start();
+        });
+      } else {
+        console.warn('⚠️  SSL certificates not found, using HTTP for development');
+        http.createServer(app).listen(PORT, () => {
+          console.log(`🚀 Banger Server running on HTTP port ${PORT}`);
+          console.log(`📱 Frontend URL: ${config.frontendUrl}`);
+          console.log(`🎵 Spotify OAuth: ${config.spotify.redirectUri}`);
+
+          // Start token refresh service
+          tokenRefreshService.start();
+        });
+      }
     }
   } catch (error) {
     console.error('❌ Failed to start server:', error);
