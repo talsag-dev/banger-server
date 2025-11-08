@@ -181,78 +181,46 @@ export class MusicIntegrationService {
       const tokenData: SoundCloudTokenResponse = response.data;
       const tokenExpiresAt = new Date(Date.now() + tokenData.expires_in * 1000);
 
-      // SoundCloud API v2 profile endpoint requires client_id as query parameter
-      // Reference: https://developers.soundcloud.com/docs/api/explorer/
-      const clientId = process.env.SOUNDCLOUD_CLIENT_ID || '';
-      if (!clientId) {
-        throw new Error('SOUNDCLOUD_CLIENT_ID environment variable is not set');
-      }
-
-      // Build params object with only client_id
-      // Note: stage parameter is optional and only needed for SoundCloud staging environments
-      // It's not required for normal production use
-      const params: Record<string, string> = {
-        client_id: clientId,
-      };
-
+      // SoundCloud /me endpoint according to official docs:
+      // https://developers.soundcloud.com/docs#authentication
+      // Only requires Authorization header with Bearer token, no client_id needed
       let meResp;
-      // Try v2 API first, fallback to v1 if needed
+      let scUser: { id: number; username?: string; avatar_url?: string } | null = null;
+
       try {
-        meResp = await axios.get('https://api-v2.soundcloud.com/me', {
+        meResp = await axios.get('https://api.soundcloud.com/me', {
           headers: {
             Authorization: `Bearer ${tokenData.access_token}`,
             accept: 'application/json; charset=utf-8',
           },
-          params,
         });
-      } catch (v2Error: any) {
-        // If v2 fails with 403, try v1 endpoint (some tokens might work with v1)
-        if (v2Error.response?.status === 403 || v2Error.response?.status === 404) {
-          console.warn('SoundCloud v2 API failed, trying v1 endpoint:', v2Error.response?.status);
-          try {
-            meResp = await axios.get('https://api.soundcloud.com/me', {
-              headers: {
-                Authorization: `Bearer ${tokenData.access_token}`,
-                accept: 'application/json; charset=utf-8',
-              },
-            });
-          } catch (v1Error: any) {
-            console.error('SoundCloud /me API error (both v1 and v2 failed):', {
-              v2Status: v2Error.response?.status,
-              v2Data: v2Error.response?.data,
-              v1Status: v1Error.response?.status,
-              v1Data: v1Error.response?.data,
-              tokenLength: tokenData.access_token?.length,
-            });
-            throw new Error(
-              `Failed to fetch SoundCloud user profile: ${
-                v1Error.response?.status || v2Error.response?.status
-              } ${v1Error.response?.statusText || v2Error.response?.statusText || v1Error.message}`
-            );
-          }
-        } else {
-          console.error('SoundCloud /me API error:', {
-            status: v2Error.response?.status,
-            statusText: v2Error.response?.statusText,
-            data: v2Error.response?.data,
-            url: v2Error.config?.url,
-            params: v2Error.config?.params,
-          });
-          throw new Error(
-            `Failed to fetch SoundCloud user profile: ${v2Error.response?.status} ${
-              v2Error.response?.statusText || v2Error.message
-            }`
-          );
-        }
+        scUser = meResp.data as { id: number; username?: string; avatar_url?: string };
+      } catch (error: any) {
+        // If /me fails, log but don't throw - connection can still succeed
+        // The token is valid even if we can't fetch profile immediately
+        console.warn('SoundCloud /me API failed, but connection will proceed:', {
+          status: error.response?.status,
+          statusText: error.response?.statusText,
+          data: error.response?.data,
+        });
+        // Continue without user profile - we'll use a placeholder
+        scUser = null;
       }
 
-      const scUser = meResp.data as { id: number; username?: string; avatar_url?: string };
-
       const existingIntegration = await findMusicIntegration(userId, 'soundcloud');
+
+      // If we couldn't get user profile, use existing data or placeholders
+      const displayName =
+        scUser?.username || existingIntegration?.display_name || 'SoundCloud User';
+      const avatarUrl = scUser?.avatar_url || existingIntegration?.avatar_url || undefined;
+      const providerUserId = scUser
+        ? String(scUser.id)
+        : existingIntegration?.provider_user_id || 'unknown';
+
       if (existingIntegration) {
         return (await updateMusicIntegration(userId, 'soundcloud', {
-          display_name: scUser.username,
-          avatar_url: scUser.avatar_url,
+          display_name: displayName,
+          avatar_url: avatarUrl,
           access_token: tokenData.access_token,
           refresh_token: tokenData.refresh_token,
           token_expires_at: tokenExpiresAt,
@@ -265,9 +233,9 @@ export class MusicIntegrationService {
       const integrationData: CreateMusicIntegrationData = {
         user_id: userId,
         provider: 'soundcloud',
-        provider_user_id: String(scUser.id),
-        display_name: scUser.username,
-        avatar_url: scUser.avatar_url,
+        provider_user_id: providerUserId,
+        display_name: displayName,
+        avatar_url: avatarUrl,
         access_token: tokenData.access_token,
         refresh_token: tokenData.refresh_token,
         token_expires_at: tokenExpiresAt,
