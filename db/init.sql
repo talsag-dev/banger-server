@@ -123,7 +123,7 @@ CREATE INDEX IF NOT EXISTS idx_music_integrations_user_id ON music_integrations(
 CREATE INDEX IF NOT EXISTS idx_music_integrations_provider ON music_integrations(provider);
 
 -- Add constraints (using DO blocks to handle IF NOT EXISTS)
-DO $ $ BEGIN -- Add auth_provider constraint if it doesn't exist
+DO $$ BEGIN -- Add auth_provider constraint if it doesn't exist
 IF NOT EXISTS (
     SELECT
         1
@@ -164,17 +164,17 @@ ADD
 
 END IF;
 
-END $ $;
+END $$;
 
 -- Create a function to update the updated_at timestamp
 CREATE
-OR REPLACE FUNCTION update_updated_at_column() RETURNS TRIGGER AS $ $ BEGIN NEW.updated_at = CURRENT_TIMESTAMP;
+OR REPLACE FUNCTION update_updated_at_column() RETURNS TRIGGER AS $$ BEGIN NEW.updated_at = CURRENT_TIMESTAMP;
 
 RETURN NEW;
 
 END;
 
-$ $ LANGUAGE 'plpgsql';
+$$ LANGUAGE 'plpgsql';
 
 -- Create triggers for updated_at
 DROP TRIGGER IF EXISTS update_users_updated_at ON users;
