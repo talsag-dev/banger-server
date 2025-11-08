@@ -20,7 +20,10 @@ export const config = {
 export const allowedOrigins = [
   config.frontendUrl,
   'https://localhost:3001',
-];
+  'https://localhost:5173',
+  'http://localhost:5173',
+  'http://localhost:3001',
+].filter(Boolean); // Remove any undefined/null values
 
 export const isProduction = config.nodeEnv === 'production';
 
@@ -44,5 +47,3 @@ export const logger = {
     console.warn(...args);
   },
 };
-
-
