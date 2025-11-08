@@ -136,11 +136,40 @@ app.get('/health', (req, res) => {
 
 // Redirect frontend routes to frontend URL (for OAuth callbacks that land on backend)
 // This handles cases where SoundCloud redirects to the backend URL instead of frontend
+// MUST be before the 404 handler
 app.get('/auth/*', (req, res) => {
-  const queryString = req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '';
-  const redirectUrl = `${config.frontendUrl}${req.path}${queryString}`;
-  console.log(`🔄 Redirecting frontend route to: ${redirectUrl}`);
-  return res.redirect(redirectUrl);
+  const fullUrl = req.originalUrl || req.url;
+  const queryString = fullUrl.includes('?') ? fullUrl.substring(fullUrl.indexOf('?')) : '';
+  const path = req.path;
+
+  // In production, if FRONTEND_URL is not set, try to infer from request
+  let frontendUrl = config.frontendUrl;
+  if (config.nodeEnv === 'production' && (!frontendUrl || frontendUrl.includes('localhost'))) {
+    // Try to construct frontend URL from backend URL
+    // If backend is banger-server.onrender.com, frontend might be banger-j561.onrender.com
+    const host = req.get('host') || '';
+    const protocol = req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+
+    if (host.includes('banger-server')) {
+      frontendUrl = `${protocol}://${host.replace('banger-server', 'banger-j561')}`;
+      console.log(`⚠️ FRONTEND_URL not set, inferred: ${frontendUrl}`);
+    } else if (host.includes('onrender.com')) {
+      // Generic fallback for Render - use the frontend URL from the error message
+      frontendUrl = `https://banger-j561.onrender.com`;
+      console.log(`⚠️ FRONTEND_URL not set, using fallback: ${frontendUrl}`);
+    }
+  }
+
+  const redirectUrl = `${frontendUrl}${path}${queryString}`;
+  console.log(`🔄 Redirecting frontend route:`, {
+    originalUrl: fullUrl,
+    path: path,
+    queryString: queryString.substring(0, 100), // Limit log size
+    redirectTo: redirectUrl,
+    frontendUrl: frontendUrl,
+    configFrontendUrl: config.frontendUrl,
+  });
+  return res.redirect(301, redirectUrl);
 });
 
 // 404 handler
