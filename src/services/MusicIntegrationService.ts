@@ -181,9 +181,18 @@ export class MusicIntegrationService {
       const tokenData: SoundCloudTokenResponse = response.data;
       const tokenExpiresAt = new Date(Date.now() + tokenData.expires_in * 1000);
 
-      // SoundCloud profile endpoint: https://api.soundcloud.com/me
-      const meResp = await axios.get('https://api.soundcloud.com/me', {
-        headers: { Authorization: `Bearer ${tokenData.access_token}` },
+      // SoundCloud API v2 profile endpoint requires client_id as query parameter
+      // Reference: https://developers.soundcloud.com/docs/api/explorer/
+      const clientId = process.env.SOUNDCLOUD_CLIENT_ID || '';
+      const meResp = await axios.get('https://api-v2.soundcloud.com/me', {
+        headers: {
+          Authorization: `Bearer ${tokenData.access_token}`,
+          accept: 'application/json; charset=utf-8',
+        },
+        params: {
+          client_id: clientId,
+          // stage parameter is optional and should only be included if needed for staging
+        },
       });
 
       const scUser = meResp.data as { id: number; username?: string; avatar_url?: string };
