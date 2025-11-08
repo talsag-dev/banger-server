@@ -189,22 +189,3 @@ CREATE TRIGGER update_music_integrations_updated_at BEFORE
 UPDATE
     ON music_integrations FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
--- Insert some sample data for development
-INSERT INTO
-    users (
-        spotify_id,
-        username,
-        display_name,
-        email,
-        bio,
-        avatar_url
-    )
-VALUES
-    (
-        'sample_user_1',
-        'musiclover',
-        'Music Lover',
-        'music@example.com',
-        'Discovering new beats every day 🎵',
-        'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=150&h=150&fit=crop&crop=face'
-    ) ON CONFLICT (spotify_id) DO NOTHING;
