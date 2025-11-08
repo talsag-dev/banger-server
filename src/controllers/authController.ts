@@ -45,7 +45,21 @@ export const authController = {
         return res.status(400).json({ success: false, error: 'Email and password are required' });
       }
       const { user, token } = await authService.loginWithEmail(email, password);
-      res.cookie('auth_token', token, authService.generateCookieOptions());
+      const cookieOptions = authService.generateCookieOptions();
+
+      // Debug logging in production to help diagnose cookie issues
+      if (process.env.NODE_ENV === 'production' || process.env.DEBUG === 'true') {
+        console.log('🍪 Setting auth cookie with options:', {
+          secure: cookieOptions.secure,
+          sameSite: cookieOptions.sameSite,
+          httpOnly: cookieOptions.httpOnly,
+          path: cookieOptions.path,
+          maxAge: cookieOptions.maxAge,
+          origin: req.headers.origin,
+        });
+      }
+
+      res.cookie('auth_token', token, cookieOptions);
       return res.status(200).json({
         success: true,
         data: {

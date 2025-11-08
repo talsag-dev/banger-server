@@ -64,10 +64,10 @@ export class AuthService {
       email_verified: false, // TODO: Implement email verification
     };
 
-      const user = await createUser(userData);
-      const token = await this.generateJWT(user);
+    const user = await createUser(userData);
+    const token = await this.generateJWT(user);
 
-      return { user, token };
+    return { user, token };
   }
 
   async loginWithEmail(email: string, password: string): Promise<AuthResult> {
@@ -220,7 +220,7 @@ export class AuthService {
   async generateJWT(user: User): Promise<string> {
     // Fetch user integrations to include in token
     const integrations = await getUserMusicIntegrations(user.id);
-    
+
     // Transform integrations for JWT payload (only include necessary fields)
     const integrationsPayload = integrations.map((integration) => ({
       provider: integration.provider,
@@ -273,14 +273,18 @@ export class AuthService {
   generateCookieOptions() {
     // Use secure cookies when HTTPS is forced or in production
     const forceHttps = process.env.USE_HTTPS === 'true';
-    const isSecure = process.env.NODE_ENV === 'production' || forceHttps;
+    const isProduction = process.env.NODE_ENV === 'production';
+    // In production (e.g., Render), always use secure cookies for cross-origin support
+    const isSecure = isProduction || forceHttps;
 
     return {
       httpOnly: true,
-      secure: isSecure,
+      secure: isSecure, // Required for sameSite: 'none' in cross-origin scenarios
       sameSite: isSecure ? ('none' as const) : ('lax' as const), // 'none' for HTTPS cross-domain, 'lax' for HTTP
       maxAge: 24 * 60 * 60 * 1000, // 24 hours
       // Removed domain restriction to allow cookies to work with both localhost and ngrok
+      // Path should be set to allow cookies to be sent to all API routes
+      path: '/',
     };
   }
 }
