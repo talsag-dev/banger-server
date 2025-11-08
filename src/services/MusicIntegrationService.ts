@@ -184,16 +184,71 @@ export class MusicIntegrationService {
       // SoundCloud API v2 profile endpoint requires client_id as query parameter
       // Reference: https://developers.soundcloud.com/docs/api/explorer/
       const clientId = process.env.SOUNDCLOUD_CLIENT_ID || '';
-      const meResp = await axios.get('https://api-v2.soundcloud.com/me', {
-        headers: {
-          Authorization: `Bearer ${tokenData.access_token}`,
-          accept: 'application/json; charset=utf-8',
-        },
-        params: {
-          client_id: clientId,
-          // stage parameter is optional and should only be included if needed for staging
-        },
-      });
+      if (!clientId) {
+        throw new Error('SOUNDCLOUD_CLIENT_ID environment variable is not set');
+      }
+
+      // Build params object, ensuring no undefined values are included
+      const params: Record<string, string> = {
+        client_id: clientId,
+      };
+
+      // Only add stage if it's explicitly set in environment
+      const stage = process.env.SOUNDCLOUD_STAGE;
+      if (stage && stage !== 'undefined') {
+        params.stage = stage;
+      }
+
+      let meResp;
+      // Try v2 API first, fallback to v1 if needed
+      try {
+        meResp = await axios.get('https://api-v2.soundcloud.com/me', {
+          headers: {
+            Authorization: `Bearer ${tokenData.access_token}`,
+            accept: 'application/json; charset=utf-8',
+          },
+          params,
+        });
+      } catch (v2Error: any) {
+        // If v2 fails with 403, try v1 endpoint (some tokens might work with v1)
+        if (v2Error.response?.status === 403 || v2Error.response?.status === 404) {
+          console.warn('SoundCloud v2 API failed, trying v1 endpoint:', v2Error.response?.status);
+          try {
+            meResp = await axios.get('https://api.soundcloud.com/me', {
+              headers: {
+                Authorization: `Bearer ${tokenData.access_token}`,
+                accept: 'application/json; charset=utf-8',
+              },
+            });
+          } catch (v1Error: any) {
+            console.error('SoundCloud /me API error (both v1 and v2 failed):', {
+              v2Status: v2Error.response?.status,
+              v2Data: v2Error.response?.data,
+              v1Status: v1Error.response?.status,
+              v1Data: v1Error.response?.data,
+              tokenLength: tokenData.access_token?.length,
+            });
+            throw new Error(
+              `Failed to fetch SoundCloud user profile: ${
+                v1Error.response?.status || v2Error.response?.status
+              } ${v1Error.response?.statusText || v2Error.response?.statusText || v1Error.message}`
+            );
+          }
+        } else {
+          console.error('SoundCloud /me API error:', {
+            status: v2Error.response?.status,
+            statusText: v2Error.response?.statusText,
+            data: v2Error.response?.data,
+            url: v2Error.config?.url,
+            params: v2Error.config?.params,
+          });
+          throw new Error(
+            `Failed to fetch SoundCloud user profile: ${v2Error.response?.status} ${
+              v2Error.response?.statusText || v2Error.message
+            }`
+          );
+        }
+      }
 
       const scUser = meResp.data as { id: number; username?: string; avatar_url?: string };
 
