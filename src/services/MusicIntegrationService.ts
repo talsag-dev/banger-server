@@ -188,16 +188,12 @@ export class MusicIntegrationService {
         throw new Error('SOUNDCLOUD_CLIENT_ID environment variable is not set');
       }
 
-      // Build params object, ensuring no undefined values are included
+      // Build params object with only client_id
+      // Note: stage parameter is optional and only needed for SoundCloud staging environments
+      // It's not required for normal production use
       const params: Record<string, string> = {
         client_id: clientId,
       };
-
-      // Only add stage if it's explicitly set in environment
-      const stage = process.env.SOUNDCLOUD_STAGE;
-      if (stage && stage !== 'undefined') {
-        params.stage = stage;
-      }
 
       let meResp;
       // Try v2 API first, fallback to v1 if needed
