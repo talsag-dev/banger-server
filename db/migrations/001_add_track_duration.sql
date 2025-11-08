@@ -1,7 +1,8 @@
 -- Migration: Add track_duration column to posts table
 -- Date: 2024-01-XX
 -- Description: Adds track_duration column to store track duration in seconds
-DO $ $ BEGIN IF NOT EXISTS (
+DO $$ BEGIN 
+IF NOT EXISTS (
     SELECT
         1
     FROM
@@ -19,4 +20,4 @@ RAISE NOTICE 'Added track_duration column to posts table';
 
 END IF;
 
-END $ $;
+END $$;
