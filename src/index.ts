@@ -134,6 +134,15 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Redirect frontend routes to frontend URL (for OAuth callbacks that land on backend)
+// This handles cases where SoundCloud redirects to the backend URL instead of frontend
+app.get('/auth/*', (req, res) => {
+  const queryString = req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '';
+  const redirectUrl = `${config.frontendUrl}${req.path}${queryString}`;
+  console.log(`🔄 Redirecting frontend route to: ${redirectUrl}`);
+  return res.redirect(redirectUrl);
+});
+
 // 404 handler
 app.use('*', (req, res) => {
   res.status(404).json({ error: 'Route not found' });
