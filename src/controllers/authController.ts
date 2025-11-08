@@ -31,6 +31,8 @@ export const authController = {
             displayName: user.display_name,
             authProvider: user.auth_provider,
           },
+          // Also return token in response body for cross-domain support
+          token: token,
         },
       });
     } catch (error: any) {
@@ -69,6 +71,9 @@ export const authController = {
             displayName: user.display_name,
             authProvider: user.auth_provider,
           },
+          // Also return token in response body for cross-domain support
+          // Frontend can store this in localStorage and send as Authorization header
+          token: token,
         },
       });
     } catch (error: any) {

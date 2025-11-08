@@ -15,19 +15,33 @@ export interface AuthenticatedRequest extends Request {
 
 export const auth = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
-    const token = req.cookies?.auth_token;
+    // Try to get token from Authorization header first (for cross-domain support)
+    const authHeader = req.headers.authorization;
+    let token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : null;
 
-    if (config.debug) {
-      // eslint-disable-next-line no-console
-      console.log('Auth middleware - Headers:', {
-        cookie: req.headers.cookie,
+    // Fallback to cookie if no Authorization header
+    if (!token) {
+      token = req.cookies?.auth_token;
+    }
+
+    // Always log in production to help diagnose issues
+    if (!token) {
+      console.log('🔍 Auth middleware - No token found:', {
+        hasAuthHeader: !!authHeader,
+        hasCookies: !!req.cookies,
+        cookieKeys: req.cookies ? Object.keys(req.cookies) : [],
+        cookieHeader: req.headers.cookie ? 'Present' : 'Missing',
         origin: req.headers.origin,
-        referer: req.headers.referer,
+        userAgent: req.headers['user-agent']?.substring(0, 50),
       });
+    }
+
+    if (config.debug && token) {
       // eslint-disable-next-line no-console
-      console.log('Auth middleware - Cookies:', req.cookies);
-      // eslint-disable-next-line no-console
-      console.log('Auth middleware - Token:', token ? 'Present' : 'Missing');
+      console.log('Auth middleware - Token found:', {
+        source: authHeader ? 'Authorization header' : 'Cookie',
+        origin: req.headers.origin,
+      });
     }
 
     if (!token) {
