@@ -375,22 +375,21 @@ export const authController = {
   },
 
   logout: (req: Request, res: Response) => {
-    const cookieOptions = [
-      { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax' as const },
-      {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax' as const,
-        domain: 'localhost',
-      },
-      {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax' as const,
-        domain: '.localhost',
-      },
-    ];
-    cookieOptions.forEach((options) => res.clearCookie('auth_token', options));
+    // Use the same cookie options that were used to set the cookie
+    // This ensures the cookie is properly cleared
+    const cookieOptions = authService.generateCookieOptions();
+
+    // clearCookie needs to match the exact options used when setting the cookie
+    // Remove maxAge as it's not needed for clearing
+    const { maxAge, ...clearOptions } = cookieOptions;
+
+    res.clearCookie('auth_token', clearOptions);
+
+    // Also try clearing with common domain variations in case cookie was set with domain
+    // This handles edge cases where domain might have been set differently
+    res.clearCookie('auth_token', { ...clearOptions, domain: 'localhost' });
+    res.clearCookie('auth_token', { ...clearOptions, domain: '.localhost' });
+
     return res.status(200).json({ success: true, data: { message: 'Logged out successfully' } });
   },
 
