@@ -30,9 +30,11 @@ RUN npm ci --only=production && npm cache clean --force
 # Copy built files from builder stage
 COPY --from=builder /app/dist ./dist
 
+# Copy db directory (init.sql and migrations) - needed at runtime
+COPY db ./db
+
 # Expose port
 EXPOSE 3001
 
 # Start the application
 CMD ["npm", "start"]
-
