@@ -134,13 +134,30 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Debug middleware to log all requests (before redirect)
+app.use((req, res, next) => {
+  if (req.path.startsWith('/auth/') && !req.path.startsWith('/api/')) {
+    console.log(`🔍 Request to frontend route:`, {
+      method: req.method,
+      path: req.path,
+      originalUrl: req.originalUrl,
+      url: req.url,
+      host: req.get('host'),
+    });
+  }
+  next();
+});
+
 // Redirect frontend routes to frontend URL (for OAuth callbacks that land on backend)
 // This handles cases where SoundCloud redirects to the backend URL instead of frontend
 // MUST be before the 404 handler
-app.get('/auth/*', (req, res) => {
+// Use app.all to catch all HTTP methods (GET, POST, etc.)
+app.all('/auth/*', (req, res) => {
   const fullUrl = req.originalUrl || req.url;
   const queryString = fullUrl.includes('?') ? fullUrl.substring(fullUrl.indexOf('?')) : '';
   const path = req.path;
+
+  console.log(`🔄 Redirect handler triggered for: ${req.method} ${req.path}`);
 
   // In production, if FRONTEND_URL is not set, try to infer from request
   let frontendUrl = config.frontendUrl;
@@ -162,6 +179,7 @@ app.get('/auth/*', (req, res) => {
 
   const redirectUrl = `${frontendUrl}${path}${queryString}`;
   console.log(`🔄 Redirecting frontend route:`, {
+    method: req.method,
     originalUrl: fullUrl,
     path: path,
     queryString: queryString.substring(0, 100), // Limit log size
