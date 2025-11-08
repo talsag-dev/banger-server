@@ -15,10 +15,26 @@ interface TokenRefreshConfig {
   getHeaders: () => Record<string, string>;
 }
 
+interface ValidationConfig {
+  url: string;
+  getParams?: () => Record<string, string>;
+  getHeaders: (accessToken: string) => Record<string, string>;
+}
+
+interface Integration {
+  access_token?: string | null;
+  refresh_token?: string | null;
+  token_expires_at?: Date | null;
+  has_valid_token?: boolean;
+  is_connected?: boolean;
+}
+
 export class TokenRefreshService {
   private refreshInterval: NodeJS.Timeout | null = null;
+  private validationInterval: NodeJS.Timeout | null = null;
   private readonly REFRESH_INTERVAL_MS = 30 * 60 * 1000; // Run every 30 minutes
-  private readonly REFRESH_THRESHOLD_MS = 45 * 60 * 1000; // 45 minutes
+  private readonly VALIDATION_INTERVAL_MS = 5 * 60 * 1000; // Validate tokens every 5 minutes
+  private readonly REFRESH_THRESHOLD_MS = 60 * 60 * 1000; // 60 minutes
   private readonly BATCH_SIZE = 10;
 
   private readonly providerConfigs: Record<Provider, TokenRefreshConfig> = {
@@ -52,126 +68,285 @@ export class TokenRefreshService {
     },
   };
 
+  private readonly validationConfigs: Record<Provider, ValidationConfig> = {
+    spotify: {
+      url: 'https://api.spotify.com/v1/me',
+      getHeaders: (accessToken) => ({
+        Authorization: `Bearer ${accessToken}`,
+      }),
+    },
+    soundcloud: {
+      url: 'https://api.soundcloud.com/me',
+      getHeaders: (accessToken) => ({
+        Authorization: `Bearer ${accessToken}`,
+        accept: 'application/json; charset=utf-8',
+      }),
+    },
+  };
+
   private readonly getUserIdsFunctions: Record<Provider, () => Promise<string[]>> = {
     spotify: getAllUsersWithSpotifyIntegrations,
     soundcloud: getAllUsersWithSoundCloudIntegrations,
   };
 
   /**
-   * Start the background token refresh service
+   * Start the background token refresh and validation services
    */
   start(): void {
     if (this.refreshInterval) {
       return; // Already running
     }
 
-    // Run immediately on start, then every interval
     this.refreshTokensForAllUsers();
-
     this.refreshInterval = setInterval(() => {
       this.refreshTokensForAllUsers();
     }, this.REFRESH_INTERVAL_MS);
 
+    this.validateTokensForAllUsers();
+    this.validationInterval = setInterval(() => {
+      this.validateTokensForAllUsers();
+    }, this.VALIDATION_INTERVAL_MS);
+
     if (config.debug) {
       console.log('🔄 Token refresh service started');
+      console.log('🔍 Token validation service started (runs every 5 minutes)');
     }
   }
 
   /**
-   * Stop the background token refresh service
+   * Stop the background token refresh and validation services
    */
   stop(): void {
     if (this.refreshInterval) {
       clearInterval(this.refreshInterval);
       this.refreshInterval = null;
+    }
 
+    if (this.validationInterval) {
+      clearInterval(this.validationInterval);
+      this.validationInterval = null;
+    }
+
+    if (config.debug) {
+      console.log('⏹️ Token refresh and validation services stopped');
+    }
+  }
+
+  /**
+   * Process all users for a given operation (refresh or validate)
+   */
+  private async processAllUsers<T>(
+    operation: (userId: string, provider: Provider) => Promise<T>,
+    operationName: string
+  ): Promise<void> {
+    try {
       if (config.debug) {
-        console.log('⏹️ Token refresh service stopped');
+        console.log(`🔄 ${operationName} cycle started`);
+      }
+
+      const providers: Provider[] = ['spotify', 'soundcloud'];
+      const results: T[] = [];
+
+      for (const provider of providers) {
+        const userIds = await this.getUserIdsFunctions[provider]();
+        if (userIds.length === 0) continue;
+
+        for (let i = 0; i < userIds.length; i += this.BATCH_SIZE) {
+          const batch = userIds.slice(i, i + this.BATCH_SIZE);
+          const batchResults = await Promise.all(
+            batch.map((userId) => operation(userId, provider))
+          );
+          results.push(...batchResults);
+        }
+      }
+    } catch (error) {
+      console.error(`Error in ${operationName} service:`, error);
+    }
+  }
+
+  /**
+   * Refresh tokens for all users
+   */
+  private async refreshTokensForAllUsers(): Promise<void> {
+    let refreshed = 0;
+    let skipped = 0;
+    let failed = 0;
+
+    await this.processAllUsers(async (userId, provider) => {
+      const result = await this.refreshTokenForUser(userId, provider);
+      if (result === true) refreshed++;
+      else if (result === false) skipped++;
+      else if (result === null) failed++;
+      return result;
+    }, 'Token refresh');
+
+    if (config.debug) {
+      const total = refreshed + skipped + failed;
+      if (total > 0) {
+        console.log(
+          `   Token refresh complete: ${refreshed} refreshed, ${skipped} skipped, ${failed} failed`
+        );
       }
     }
   }
 
   /**
-   * Refresh tokens for all users with integrations that need refresh
+   * Validate tokens for all users
    */
-  private async refreshTokensForAllUsers(): Promise<void> {
-    try {
-      if (config.debug) {
-        console.log('🔄 Token refresh cycle started');
+  private async validateTokensForAllUsers(): Promise<void> {
+    let validated = 0;
+    let invalid = 0;
+    let refreshed = 0;
+
+    await this.processAllUsers(async (userId, provider) => {
+      const result = await this.validateTokenForUser(userId, provider);
+      if (result === 'valid') validated++;
+      else if (result === 'invalid') invalid++;
+      else if (result === 'refreshed') refreshed++;
+      return result;
+    }, 'Token validation');
+
+    if (config.debug) {
+      const total = validated + invalid + refreshed;
+      if (total > 0) {
+        console.log(
+          `   Token validation complete: ${validated} valid, ${invalid} invalid, ${refreshed} refreshed`
+        );
       }
-
-      const providers: Provider[] = ['spotify', 'soundcloud'];
-      let refreshed = 0;
-      let skipped = 0;
-      let failed = 0;
-
-      // Process all providers
-      for (const provider of providers) {
-        const userIds = await this.getUserIdsFunctions[provider]();
-
-        if (userIds.length === 0) continue;
-
-        // Process in batches
-        for (let i = 0; i < userIds.length; i += this.BATCH_SIZE) {
-          const batch = userIds.slice(i, i + this.BATCH_SIZE);
-          await Promise.all(
-            batch.map(async (userId) => {
-              const result = await this.refreshTokenForUser(userId, provider);
-              if (result === true) refreshed++;
-              else if (result === false) skipped++;
-              else if (result === null) failed++;
-            })
-          );
-        }
-      }
-
-      if (config.debug) {
-        const total = refreshed + skipped + failed;
-        if (total > 0) {
-          console.log(
-            `   Token refresh complete: ${refreshed} refreshed, ${skipped} skipped, ${failed} failed`
-          );
-        } else {
-          console.log('   No users with integrations to refresh');
-        }
-      }
-    } catch (error) {
-      console.error('Error in token refresh service:', error);
     }
+  }
+
+  /**
+   * Validate token by making a test API call
+   */
+  private async validateToken(provider: Provider, accessToken: string): Promise<boolean | null> {
+    try {
+      const validationConfig = this.validationConfigs[provider];
+      const requestConfig: {
+        headers: Record<string, string>;
+        params?: Record<string, string>;
+        timeout: number;
+      } = {
+        headers: validationConfig.getHeaders(accessToken),
+        timeout: 5000,
+      };
+
+      if (validationConfig.getParams) {
+        requestConfig.params = validationConfig.getParams();
+      }
+
+      const response = await axios.get(validationConfig.url, requestConfig);
+      return response.status === 200;
+    } catch (error: any) {
+      if (error.response?.status === 401) {
+        return false; // Token is invalid
+      }
+      return null; // Other error, can't determine validity
+    }
+  }
+
+  /**
+   * Check if token should be refreshed based on expiration and status
+   */
+  private shouldRefreshToken(integration: Integration): boolean {
+    const expiresAt = integration.token_expires_at ? new Date(integration.token_expires_at) : null;
+    const now = new Date();
+
+    if (!expiresAt) {
+      return true; // No expiration date, treat as expired
+    }
+
+    const timeUntilExpiry = expiresAt.getTime() - now.getTime();
+    const isExpired = timeUntilExpiry < 0;
+    const expiresSoon = timeUntilExpiry <= this.REFRESH_THRESHOLD_MS;
+    const isInvalid = !integration.has_valid_token || !integration.is_connected;
+
+    return isExpired || expiresSoon || isInvalid;
+  }
+
+  /**
+   * Get integration for a user and provider
+   */
+  private async getIntegration(userId: string, provider: Provider): Promise<Integration | null> {
+    const integrations = await getUserMusicIntegrations(userId);
+    return integrations.find((i) => i.provider === provider) || null;
+  }
+
+  /**
+   * Validate a single user's token and refresh if invalid
+   */
+  private async validateTokenForUser(
+    userId: string,
+    provider: Provider
+  ): Promise<'valid' | 'invalid' | 'refreshed' | 'skipped'> {
+    try {
+      const integration = await this.getIntegration(userId, provider);
+
+      if (!integration?.access_token || !integration.refresh_token) {
+        return 'skipped';
+      }
+
+      if (!integration.has_valid_token || !integration.is_connected) {
+        return 'skipped'; // Already marked as invalid
+      }
+
+      const isValid = await this.validateToken(provider, integration.access_token);
+
+      if (isValid === false) {
+        // Token is invalid, mark and refresh
+        await this.markTokenAsInvalid(userId, provider);
+        const refreshResult = await this.performTokenRefresh(userId, provider, {
+          refresh_token: integration.refresh_token,
+          token_expires_at: integration.token_expires_at,
+        });
+        return refreshResult === true ? 'refreshed' : 'invalid';
+      }
+
+      return isValid === true ? 'valid' : 'skipped';
+    } catch (error) {
+      console.error(`Error validating ${provider} token for user ${userId}:`, error);
+      return 'skipped';
+    }
+  }
+
+  /**
+   * Mark token as invalid in database
+   */
+  private async markTokenAsInvalid(userId: string, provider: Provider): Promise<void> {
+    await updateMusicIntegrationTokens(userId, provider, {
+      has_valid_token: false,
+      is_connected: false,
+    });
   }
 
   /**
    * Refresh token for a specific user's integration
-   * Returns: true if refreshed, false if skipped (token still valid), null if failed
+   * Returns: true if refreshed, false if skipped, null if failed
    */
   async refreshTokenForUser(userId: string, provider: Provider): Promise<boolean | null> {
     try {
-      const integrations = await getUserMusicIntegrations(userId);
-      const integration = integrations.find((i) => i.provider === provider);
+      const integration = await this.getIntegration(userId, provider);
 
-      if (!integration || !integration.refresh_token) {
+      if (!integration?.refresh_token) {
         if (config.debug) {
-          console.log(`   ⏭️  Skipped user ${userId}: No ${provider} integration or refresh token`);
-        }
-        return false;
-      }
-
-      const shouldRefresh = this.shouldRefreshToken(integration);
-      if (!shouldRefresh) {
-        if (config.debug) {
-          const expiresAt = integration.token_expires_at
-            ? new Date(integration.token_expires_at)
-            : null;
-          const timeUntilExpiry = expiresAt ? expiresAt.getTime() - new Date().getTime() : Infinity;
-          const minutesUntilExpiry = Math.round(timeUntilExpiry / 60000);
           console.log(
-            `   ⏭️  Skipped user ${userId} (${provider}): Token still valid (expires in ${minutesUntilExpiry} minutes)`
+            `   ⏭️  Skipped user ${userId} (${provider}): No integration or refresh token`
           );
         }
         return false;
       }
 
-      // At this point we know refresh_token exists (checked above)
+      // Check if refresh is needed based on expiration and status
+      if (!this.shouldRefreshToken(integration)) {
+        await this.logSkip(userId, provider, 'Token still valid', integration);
+        return false;
+      }
+
+      // Perform refresh
+      if (config.debug) {
+        console.log(`   🔄 Attempting to refresh ${provider} token for user ${userId}`);
+      }
+
       return await this.performTokenRefresh(userId, provider, {
         refresh_token: integration.refresh_token,
         token_expires_at: integration.token_expires_at,
@@ -183,22 +358,25 @@ export class TokenRefreshService {
   }
 
   /**
-   * Check if token should be refreshed
+   * Log skip message with optional expiry info
    */
-  private shouldRefreshToken(integration: {
-    token_expires_at?: Date | null;
-    has_valid_token?: boolean;
-    is_connected?: boolean;
-  }): boolean {
-    const expiresAt = integration.token_expires_at ? new Date(integration.token_expires_at) : null;
-    const now = new Date();
-    const timeUntilExpiry = expiresAt ? expiresAt.getTime() - now.getTime() : -1;
+  private async logSkip(
+    userId: string,
+    provider: Provider,
+    reason: string,
+    integration?: Integration | null
+  ): Promise<void> {
+    if (!config.debug) return;
 
-    return (
-      timeUntilExpiry <= this.REFRESH_THRESHOLD_MS ||
-      !integration.has_valid_token ||
-      !integration.is_connected
-    );
+    if (integration?.token_expires_at) {
+      const expiresAt = new Date(integration.token_expires_at);
+      const minutesUntilExpiry = Math.round((expiresAt.getTime() - Date.now()) / 60000);
+      console.log(
+        `   ⏭️  Skipped user ${userId} (${provider}): ${reason} (expires in ${minutesUntilExpiry} minutes)`
+      );
+    } else {
+      console.log(`   ⏭️  Skipped user ${userId} (${provider}): ${reason}`);
+    }
   }
 
   /**
@@ -210,23 +388,6 @@ export class TokenRefreshService {
     integration: { refresh_token: string; token_expires_at?: Date | null }
   ): Promise<boolean | null> {
     const providerConfig = this.providerConfigs[provider];
-
-    if (config.debug) {
-      const expiresAt = integration.token_expires_at
-        ? new Date(integration.token_expires_at)
-        : null;
-      if (expiresAt) {
-        const timeUntilExpiry = expiresAt.getTime() - new Date().getTime();
-        const minutesUntilExpiry = Math.round(timeUntilExpiry / 60000);
-        console.log(
-          `   🔄 Refreshing ${provider} token for user ${userId} (expires in ${minutesUntilExpiry} minutes)`
-        );
-      } else {
-        console.log(
-          `   🔄 Refreshing ${provider} token for user ${userId} (no expiry date or marked invalid)`
-        );
-      }
-    }
 
     try {
       const response = await axios.post(
@@ -243,7 +404,7 @@ export class TokenRefreshService {
 
       const tokenExpiresAt = new Date(Date.now() + tokenData.expires_in * 1000);
 
-      await updateMusicIntegrationTokens(userId, provider, {
+      const updatedIntegration = await updateMusicIntegrationTokens(userId, provider, {
         access_token: tokenData.access_token,
         refresh_token: tokenData.refresh_token || integration.refresh_token,
         token_expires_at: tokenExpiresAt,
@@ -258,17 +419,7 @@ export class TokenRefreshService {
       return true;
     } catch (error) {
       console.error(`❌ Failed to refresh ${provider} token for user ${userId}:`, error);
-
-      // Mark token as invalid and disconnected on failure
-      try {
-        await updateMusicIntegrationTokens(userId, provider, {
-          has_valid_token: false,
-          is_connected: false,
-        });
-      } catch (updateError) {
-        console.error('Failed to update integration status after refresh failure:', updateError);
-      }
-
+      await this.markTokenAsInvalid(userId, provider);
       return null;
     }
   }

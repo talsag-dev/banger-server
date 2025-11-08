@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { findUserById } from '../database/queries';
+import { findUserById, getUserMusicIntegrations } from '../database/queries';
 import { authService } from '../services/AuthService';
 import { config } from '../config';
 
@@ -57,26 +57,57 @@ export const auth = async (req: AuthenticatedRequest, res: Response, next: NextF
     };
 
     // Validate integration tokens from JWT
-    const integrations = decoded.integrations || [];
+    const jwtIntegrations = decoded.integrations || [];
+    let needsJwtRefresh = false;
 
-    for (const integration of integrations) {
-      if (!integration.access_token) {
-        continue; // Skip integrations without tokens
+    // Check if any JWT integration tokens are expired or invalid
+    for (const jwtIntegration of jwtIntegrations) {
+      if (!jwtIntegration.access_token) {
+        continue;
       }
 
-      // Check if token is expired
       const isExpired =
-        integration.token_expires_at && new Date(integration.token_expires_at) < new Date();
+        jwtIntegration.token_expires_at && new Date(jwtIntegration.token_expires_at) < new Date();
+      const isInvalid = !jwtIntegration.has_valid_token || !jwtIntegration.is_connected;
 
-      // If token is expired or invalid, throw auth error
-      if (isExpired || !integration.has_valid_token || !integration.is_connected) {
+      // If JWT shows expired/invalid, check database for fresh token
+      if (isExpired || isInvalid) {
+        const dbIntegrations = await getUserMusicIntegrations(decoded.userId);
+        const dbIntegration = dbIntegrations.find((i) => i.provider === jwtIntegration.provider);
+
+        // If database has a valid token, JWT is stale - mark for refresh
+        if (
+          dbIntegration?.access_token &&
+          dbIntegration.has_valid_token &&
+          dbIntegration.is_connected
+        ) {
+          const dbIsExpired =
+            dbIntegration.token_expires_at && new Date(dbIntegration.token_expires_at) < new Date();
+
+          if (!dbIsExpired) {
+            // Database has valid token, JWT is stale
+            needsJwtRefresh = true;
+            continue;
+          }
+        }
+
+        // Database also shows expired/invalid, return error
         return res.status(401).json({
           success: false,
           error: 'Integration token expired',
-          message: `Your ${integration.provider} token has expired. Please reconnect your ${integration.provider} account.`,
+          message: `Your ${jwtIntegration.provider} token has expired. Please reconnect your ${jwtIntegration.provider} account.`,
           code: 'TOKEN_EXPIRED',
-          provider: integration.provider,
+          provider: jwtIntegration.provider,
         });
+      }
+    }
+
+    // If JWT is stale but database has fresh tokens, regenerate JWT
+    if (needsJwtRefresh) {
+      const user = await findUserById(decoded.userId);
+      if (user) {
+        const newToken = await authService.generateJWT(user);
+        res.cookie('auth_token', newToken, authService.generateCookieOptions());
       }
     }
 
