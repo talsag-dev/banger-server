@@ -107,8 +107,6 @@ CREATE INDEX IF NOT EXISTS idx_follows_follower ON follows(follower_id);
 CREATE INDEX IF NOT EXISTS idx_follows_following ON follows(following_id);
 
 -- User indexes
-CREATE INDEX IF NOT EXISTS idx_users_spotify_id ON users(spotify_id);
-
 CREATE INDEX IF NOT EXISTS idx_users_auth_provider ON users(auth_provider);
 
 CREATE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id);
